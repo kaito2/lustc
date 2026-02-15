@@ -5,6 +5,7 @@ mod lexer;
 mod parser;
 mod resolver;
 mod token;
+mod typechecker;
 
 use std::env;
 use std::fs;
@@ -16,6 +17,7 @@ use error::{CompilerError, Diagnostic, LustcResult, SourceMap};
 use lexer::Lexer;
 use parser::Parser;
 use resolver::Resolver;
+use typechecker::TypeChecker;
 
 fn compile(source: &str) -> LustcResult<String> {
     let mut lexer = Lexer::new(source);
@@ -26,6 +28,11 @@ fn compile(source: &str) -> LustcResult<String> {
     let resolver = Resolver::new();
     resolver
         .resolve(&decls)
+        .map_err(CompilerError::Multiple)?;
+
+    let checker = TypeChecker::new();
+    checker
+        .check(&decls)
         .map_err(CompilerError::Multiple)?;
 
     let mut codegen = CodeGen::new();

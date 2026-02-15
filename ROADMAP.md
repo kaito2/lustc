@@ -15,7 +15,7 @@
 - String interpolation `s!"..."` → `format!(...)` with embedded expression parsing
 - `List` / `Option` type mapping → `Vec<T>` / `Option<T>` with builtin constructors and pattern matching
 
-## v0.4.0 — Type Checker
+## v0.4.0 — Type Checker ✅
 
 - Simple type inference / type checking pass
 - Type mismatch error reporting (catch errors before code generation)

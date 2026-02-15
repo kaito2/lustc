@@ -423,9 +423,13 @@ impl CodeGen {
                 self.gen_expr(body)?;
             }
             Expr::Paren(inner) => {
-                self.output.push('(');
-                self.gen_expr(inner)?;
-                self.output.push(')');
+                if self.is_atom_expr(inner) {
+                    self.gen_expr(inner)?;
+                } else {
+                    self.output.push('(');
+                    self.gen_expr(inner)?;
+                    self.output.push(')');
+                }
             }
             Expr::Tuple(elems) => {
                 self.output.push('(');
@@ -492,10 +496,14 @@ impl CodeGen {
                 return Ok(());
             }
 
-            // toString → .to_string()
+            // toString → .to_string() (skip if arg is already a String)
             if name == "toString" {
-                self.gen_expr(args[0])?;
-                self.output.push_str(".to_string()");
+                if self.is_string_expr(args[0]) {
+                    self.gen_expr(args[0])?;
+                } else {
+                    self.gen_expr(args[0])?;
+                    self.output.push_str(".to_string()");
+                }
                 return Ok(());
             }
 
@@ -688,6 +696,26 @@ impl CodeGen {
     }
 
     // --- Helpers ---
+
+    /// Check if an expression is known to produce a String type
+    fn is_string_expr(&self, expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::StringLit(_) | Expr::StringInterpolation(_)
+        )
+    }
+
+    /// Check if an expression is a simple atom that doesn't need parentheses
+    fn is_atom_expr(&self, expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::IntLit(_)
+                | Expr::StringLit(_)
+                | Expr::BoolLit(_)
+                | Expr::Var(_, _)
+                | Expr::Tuple(_)
+        )
+    }
 
     fn type_to_rust(&self, ty: &Type) -> String {
         match ty {

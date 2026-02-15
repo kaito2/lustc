@@ -122,7 +122,7 @@ def showOpt (o : Option Nat) : String :=
 ## Compiler Pipeline
 
 ```
-Lean4 source → Lexer → Tokens → Parser → AST → Resolver → CodeGen → Rust source
+Lean4 source → Lexer → Tokens → Parser → AST → Resolver → TypeChecker → CodeGen → Rust source
 ```
 
 ## Running Tests

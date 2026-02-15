@@ -54,12 +54,11 @@ impl fmt::Display for Diagnostic<'_> {
         match self.error {
             CompilerError::LexError { msg, span }
             | CompilerError::ParseError { msg, span }
-            | CompilerError::ResolveError { msg, span } => {
+            | CompilerError::ResolveError { msg, span }
+            | CompilerError::TypeError { msg, span } => {
                 let label = match self.error {
-                    CompilerError::LexError { .. } => "error",
-                    CompilerError::ParseError { .. } => "error",
-                    CompilerError::ResolveError { .. } => "error",
-                    _ => unreachable!(),
+                    CompilerError::TypeError { .. } => "type error",
+                    _ => "error",
                 };
                 writeln!(f, "{}: {}", label, msg)?;
                 writeln!(f, "  --> {}:{}:{}", self.filename, span.line, span.column)?;
@@ -118,6 +117,10 @@ pub enum CompilerError {
         msg: String,
         span: Span,
     },
+    TypeError {
+        msg: String,
+        span: Span,
+    },
     #[allow(dead_code)]
     CodeGenError {
         msg: String,
@@ -137,6 +140,9 @@ impl fmt::Display for CompilerError {
             }
             CompilerError::ResolveError { msg, span } => {
                 write!(f, "Resolve error at {}: {}", span, msg)
+            }
+            CompilerError::TypeError { msg, span } => {
+                write!(f, "Type error at {}: {}", span, msg)
             }
             CompilerError::CodeGenError { msg } => {
                 write!(f, "Code generation error: {}", msg)

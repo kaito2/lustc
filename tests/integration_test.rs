@@ -403,6 +403,78 @@ fn test_inductive_with_type_app_fields() {
     assert!(rust.contains("Cons(u64, MyList)"));
 }
 
+// --- v0.4.0: Type checker ---
+
+#[test]
+fn test_type_error_arithmetic_on_bool() {
+    let stderr = compile_lean_fail("def f (x : Bool) : Nat := x + 1\n");
+    assert!(
+        stderr.contains("type error"),
+        "expected type error, got: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("numeric"),
+        "expected numeric type error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_type_error_if_branch_mismatch() {
+    let stderr =
+        compile_lean_fail("def f (x : Nat) : Nat := if x == 0 then 1 else true\n");
+    assert!(
+        stderr.contains("type error"),
+        "expected type error, got: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("type mismatch"),
+        "expected type mismatch, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_type_error_return_type_mismatch() {
+    let stderr = compile_lean_fail("def f (x : Nat) : String := x + 1\n");
+    assert!(
+        stderr.contains("type error"),
+        "expected type error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_codegen_no_redundant_tostring_on_string() {
+    let rust = compile_lean(
+        r#"def main : IO Unit := do
+  IO.println (toString "hello")
+"#,
+    );
+    // Should NOT contain .to_string() since "hello" is already a String
+    assert!(
+        !rust.contains(".to_string()"),
+        "expected no .to_string() on string literal, got: {}",
+        rust
+    );
+}
+
+#[test]
+fn test_codegen_removes_redundant_parens() {
+    let rust = compile_lean(
+        r#"def f (x : Nat) : Nat := (x)
+"#,
+    );
+    // The body should be just `x`, not `(x)`
+    assert!(
+        !rust.contains("(x)"),
+        "expected no redundant parens around simple var, got: {}",
+        rust
+    );
+}
+
 // --- v0.3.0: Cross-feature integration ---
 
 #[test]
