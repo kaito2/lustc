@@ -3,6 +3,7 @@ mod codegen;
 mod error;
 mod lexer;
 mod parser;
+mod resolver;
 mod token;
 
 use std::env;
@@ -11,17 +12,43 @@ use std::path::Path;
 use std::process;
 
 use codegen::CodeGen;
-use error::LustcResult;
+use error::{CompilerError, Diagnostic, LustcResult, SourceMap};
 use lexer::Lexer;
 use parser::Parser;
+use resolver::Resolver;
 
 fn compile(source: &str) -> LustcResult<String> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize()?;
     let mut parser = Parser::new(tokens);
     let decls = parser.parse_program()?;
+
+    let resolver = Resolver::new();
+    resolver
+        .resolve(&decls)
+        .map_err(CompilerError::Multiple)?;
+
     let mut codegen = CodeGen::new();
     codegen.generate(&decls)
+}
+
+fn print_error(error: &CompilerError, source: &str, filename: &str) {
+    let source_map = SourceMap::new(source);
+    match error {
+        CompilerError::Multiple(errors) => {
+            for (i, err) in errors.iter().enumerate() {
+                if i > 0 {
+                    eprintln!();
+                }
+                let diag = Diagnostic::new(err, &source_map, filename);
+                eprint!("{}", diag);
+            }
+        }
+        _ => {
+            let diag = Diagnostic::new(error, &source_map, filename);
+            eprint!("{}", diag);
+        }
+    }
 }
 
 fn main() {
@@ -58,7 +85,7 @@ fn main() {
             println!("Compiled {} -> {}", input_path, output_path);
         }
         Err(e) => {
-            eprintln!("Compilation error: {}", e);
+            print_error(&e, &source, input_path);
             process::exit(1);
         }
     }

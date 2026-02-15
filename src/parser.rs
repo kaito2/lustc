@@ -5,21 +5,49 @@ use crate::token::{Token, TokenKind};
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    errors: Vec<CompilerError>,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser {
+            tokens,
+            pos: 0,
+            errors: Vec::new(),
+        }
     }
 
     pub fn parse_program(&mut self) -> LustcResult<Vec<Decl>> {
         let mut decls = Vec::new();
         self.skip_newlines();
         while !self.is_at_end() {
-            decls.push(self.parse_decl()?);
+            match self.parse_decl() {
+                Ok(decl) => decls.push(decl),
+                Err(e) => {
+                    self.errors.push(e);
+                    self.synchronize();
+                }
+            }
             self.skip_newlines();
         }
-        Ok(decls)
+        if self.errors.is_empty() {
+            Ok(decls)
+        } else {
+            Err(CompilerError::Multiple(std::mem::take(&mut self.errors)))
+        }
+    }
+
+    fn synchronize(&mut self) {
+        loop {
+            match self.peek() {
+                TokenKind::Def | TokenKind::Inductive | TokenKind::HashEval | TokenKind::Eof => {
+                    break;
+                }
+                _ => {
+                    self.advance();
+                }
+            }
+        }
     }
 
     // --- Token navigation ---
@@ -476,6 +504,7 @@ impl Parser {
             }
             TokenKind::Ident(ref name) => {
                 let name = name.clone();
+                let span = self.peek_span();
                 self.advance();
                 // Handle qualified names like IO.println or Color.red
                 if self.check(&TokenKind::Dot) {
@@ -485,16 +514,17 @@ impl Parser {
                         let part = self.parse_ident()?;
                         qualified = format!("{}.{}", qualified, part);
                     }
-                    Ok(Expr::Var(qualified))
+                    Ok(Expr::Var(qualified, span))
                 } else {
-                    Ok(Expr::Var(name))
+                    Ok(Expr::Var(name, span))
                 }
             }
             TokenKind::LParen => {
                 self.advance();
                 if self.check(&TokenKind::RParen) {
+                    let span = self.peek_span();
                     self.advance();
-                    return Ok(Expr::Var("()".to_string()));
+                    return Ok(Expr::Var("()".to_string(), span));
                 }
                 let expr = self.parse_expr()?;
                 self.expect(&TokenKind::RParen)?;
@@ -921,10 +951,26 @@ mod tests {
         let decls = parse(r#"#eval IO.println "hi""#);
         match &decls[0] {
             Decl::Eval(Expr::FunApp { func, .. }) => match func.as_ref() {
-                Expr::Var(name) => assert_eq!(name, "IO.println"),
+                Expr::Var(name, _) => assert_eq!(name, "IO.println"),
                 _ => panic!("expected qualified var"),
             },
             _ => panic!("expected Eval with FunApp"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_parse_errors() {
+        let src = "def := 42\ndef := 99";
+        let mut lexer = Lexer::new(src);
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let result = parser.parse_program();
+        match result {
+            Err(CompilerError::Multiple(errors)) => {
+                assert_eq!(errors.len(), 2, "expected 2 errors, got {}", errors.len());
+            }
+            Err(e) => panic!("expected Multiple, got {:?}", e),
+            Ok(_) => panic!("expected error"),
         }
     }
 }

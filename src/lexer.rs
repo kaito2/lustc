@@ -60,20 +60,29 @@ impl Lexer {
             // Emit dedents for remaining indent levels
             while self.indent_stack.len() > 1 {
                 self.indent_stack.pop();
-                self.pending_tokens
-                    .push(Token::new(TokenKind::Dedent, self.line, self.column));
+                self.pending_tokens.push(Token::new(
+                    TokenKind::Dedent,
+                    self.line,
+                    self.column,
+                    self.column + 1,
+                ));
             }
             if let Some(tok) = self.pending_tokens.pop() {
                 return Ok(tok);
             }
-            return Ok(Token::new(TokenKind::Eof, self.line, self.column));
+            return Ok(Token::new(
+                TokenKind::Eof,
+                self.line,
+                self.column,
+                self.column + 1,
+            ));
         }
 
         let ch = self.peek_char();
 
         // Handle newlines
         if ch == '\n' {
-            let tok = Token::new(TokenKind::Newline, self.line, self.column);
+            let tok = Token::new(TokenKind::Newline, self.line, self.column, self.column + 1);
             self.advance_char();
             self.at_line_start = true;
             return Ok(tok);
@@ -111,12 +120,14 @@ impl Lexer {
 
         // Unicode arrows
         if ch == '→' {
-            let tok = Token::new(TokenKind::Arrow, self.line, self.column);
+            let col = self.column;
+            let tok = Token::new(TokenKind::Arrow, self.line, col, col + 1);
             self.advance_char();
             return Ok(tok);
         }
         if ch == '←' {
-            let tok = Token::new(TokenKind::LeftArrow, self.line, self.column);
+            let col = self.column;
+            let tok = Token::new(TokenKind::LeftArrow, self.line, col, col + 1);
             self.advance_char();
             return Ok(tok);
         }
@@ -145,13 +156,21 @@ impl Lexer {
 
         if indent > current_indent {
             self.indent_stack.push(indent);
-            self.pending_tokens
-                .push(Token::new(TokenKind::Indent, self.line, self.column));
+            self.pending_tokens.push(Token::new(
+                TokenKind::Indent,
+                self.line,
+                self.column,
+                self.column + 1,
+            ));
         } else {
             while indent < *self.indent_stack.last().unwrap() {
                 self.indent_stack.pop();
-                self.pending_tokens
-                    .push(Token::new(TokenKind::Dedent, self.line, self.column));
+                self.pending_tokens.push(Token::new(
+                    TokenKind::Dedent,
+                    self.line,
+                    self.column,
+                    self.column + 1,
+                ));
             }
         }
 
@@ -182,6 +201,7 @@ impl Lexer {
         let start_span = Span {
             line: self.line,
             column: self.column,
+            end_column: self.column + 2,
         };
         // consume /-
         self.advance_char();
@@ -221,13 +241,19 @@ impl Lexer {
             self.advance_char();
         }
         if word == "eval" {
-            Ok(Token::new(TokenKind::HashEval, start_line, start_col))
+            Ok(Token::new(
+                TokenKind::HashEval,
+                start_line,
+                start_col,
+                start_col + 1 + word.len(),
+            ))
         } else {
             Err(CompilerError::LexError {
                 msg: format!("unexpected directive: #{}", word),
                 span: Span {
                     line: start_line,
                     column: start_col,
+                    end_column: start_col + 1 + word.len(),
                 },
             })
         }
@@ -249,6 +275,7 @@ impl Lexer {
                         span: Span {
                             line: start_line,
                             column: start_col,
+                            end_column: self.column,
                         },
                     });
                 }
@@ -274,12 +301,19 @@ impl Lexer {
                 span: Span {
                     line: start_line,
                     column: start_col,
+                    end_column: self.column,
                 },
             });
         }
 
         self.advance_char(); // consume closing "
-        Ok(Token::new(TokenKind::StringLit(s), start_line, start_col))
+        let end_col = self.column;
+        Ok(Token::new(
+            TokenKind::StringLit(s),
+            start_line,
+            start_col,
+            end_col,
+        ))
     }
 
     fn lex_number(&mut self) -> LustcResult<Token> {
@@ -295,9 +329,15 @@ impl Lexer {
             span: Span {
                 line: start_line,
                 column: start_col,
+                end_column: start_col + num_str.len(),
             },
         })?;
-        Ok(Token::new(TokenKind::IntLit(value), start_line, start_col))
+        Ok(Token::new(
+            TokenKind::IntLit(value),
+            start_line,
+            start_col,
+            start_col + num_str.len(),
+        ))
     }
 
     fn lex_ident(&mut self) -> LustcResult<Token> {
@@ -314,6 +354,7 @@ impl Lexer {
             }
         }
 
+        let end_col = start_col + name.len();
         let kind = match name.as_str() {
             "def" => TokenKind::Def,
             "let" => TokenKind::Let,
@@ -332,7 +373,7 @@ impl Lexer {
             _ => TokenKind::Ident(name),
         };
 
-        Ok(Token::new(kind, start_line, start_col))
+        Ok(Token::new(kind, start_line, start_col, end_col))
     }
 
     fn lex_operator(&mut self) -> LustcResult<Token> {
@@ -341,106 +382,108 @@ impl Lexer {
         let ch = self.peek_char();
         self.advance_char();
 
-        let kind = match ch {
-            '+' => TokenKind::Plus,
-            '*' => TokenKind::Star,
-            '/' => TokenKind::Slash,
-            '%' => TokenKind::Percent,
-            '(' => TokenKind::LParen,
-            ')' => TokenKind::RParen,
-            '{' => TokenKind::LBrace,
-            '}' => TokenKind::RBrace,
-            ',' => TokenKind::Comma,
-            '.' => TokenKind::Dot,
+        let (kind, end_col) = match ch {
+            '+' => (TokenKind::Plus, start_col + 1),
+            '*' => (TokenKind::Star, start_col + 1),
+            '/' => (TokenKind::Slash, start_col + 1),
+            '%' => (TokenKind::Percent, start_col + 1),
+            '(' => (TokenKind::LParen, start_col + 1),
+            ')' => (TokenKind::RParen, start_col + 1),
+            '{' => (TokenKind::LBrace, start_col + 1),
+            '}' => (TokenKind::RBrace, start_col + 1),
+            ',' => (TokenKind::Comma, start_col + 1),
+            '.' => (TokenKind::Dot, start_col + 1),
             '|' => {
                 if !self.is_at_end() && self.peek_char() == '|' {
                     self.advance_char();
-                    TokenKind::Or
+                    (TokenKind::Or, start_col + 2)
                 } else {
-                    TokenKind::Pipe
+                    (TokenKind::Pipe, start_col + 1)
                 }
             }
             '-' => {
                 if !self.is_at_end() && self.peek_char() == '>' {
                     self.advance_char();
-                    TokenKind::Arrow
+                    (TokenKind::Arrow, start_col + 2)
                 } else {
-                    TokenKind::Minus
+                    (TokenKind::Minus, start_col + 1)
                 }
             }
             '=' => {
                 if !self.is_at_end() && self.peek_char() == '>' {
                     self.advance_char();
-                    TokenKind::FatArrow
+                    (TokenKind::FatArrow, start_col + 2)
                 } else if !self.is_at_end() && self.peek_char() == '=' {
                     self.advance_char();
-                    TokenKind::EqEq
+                    (TokenKind::EqEq, start_col + 2)
                 } else {
-                    TokenKind::Eq
+                    (TokenKind::Eq, start_col + 1)
                 }
             }
             ':' => {
                 if !self.is_at_end() && self.peek_char() == '=' {
                     self.advance_char();
-                    TokenKind::ColonEq
+                    (TokenKind::ColonEq, start_col + 2)
                 } else {
-                    TokenKind::Colon
+                    (TokenKind::Colon, start_col + 1)
                 }
             }
             '!' => {
                 if !self.is_at_end() && self.peek_char() == '=' {
                     self.advance_char();
-                    TokenKind::Ne
+                    (TokenKind::Ne, start_col + 2)
                 } else {
-                    TokenKind::Not
+                    (TokenKind::Not, start_col + 1)
                 }
             }
             '<' => {
                 if !self.is_at_end() && self.peek_char() == '=' {
                     self.advance_char();
-                    TokenKind::Le
+                    (TokenKind::Le, start_col + 2)
                 } else if !self.is_at_end() && self.peek_char() == '-' {
                     self.advance_char();
-                    TokenKind::LeftArrow
+                    (TokenKind::LeftArrow, start_col + 2)
                 } else {
-                    TokenKind::Lt
+                    (TokenKind::Lt, start_col + 1)
                 }
             }
             '>' => {
                 if !self.is_at_end() && self.peek_char() == '=' {
                     self.advance_char();
-                    TokenKind::Ge
+                    (TokenKind::Ge, start_col + 2)
                 } else {
-                    TokenKind::Gt
+                    (TokenKind::Gt, start_col + 1)
                 }
             }
             '&' => {
                 if !self.is_at_end() && self.peek_char() == '&' {
                     self.advance_char();
-                    TokenKind::And
+                    (TokenKind::And, start_col + 2)
                 } else {
                     return Err(CompilerError::LexError {
                         msg: format!("unexpected character: {}", ch),
                         span: Span {
                             line: start_line,
                             column: start_col,
+                            end_column: start_col + 1,
                         },
                     });
                 }
             }
-            '_' => TokenKind::Underscore,
+            '_' => (TokenKind::Underscore, start_col + 1),
             _ => {
                 return Err(CompilerError::LexError {
                     msg: format!("unexpected character: {}", ch),
                     span: Span {
                         line: start_line,
                         column: start_col,
+                        end_column: start_col + 1,
                     },
                 });
             }
         };
 
-        Ok(Token::new(kind, start_line, start_col))
+        Ok(Token::new(kind, start_line, start_col, end_col))
     }
 
     fn peek_char(&self) -> char {

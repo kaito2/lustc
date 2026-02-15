@@ -25,12 +25,14 @@ pub struct Constructor {
     pub fields: Vec<Type>,
 }
 
+use crate::error::Span;
+
 #[derive(Debug, Clone)]
 pub enum Expr {
     IntLit(u64),
     StringLit(String),
     BoolLit(bool),
-    Var(String),
+    Var(String, Span),
     BinOp {
         op: BinOp,
         lhs: Box<Expr>,

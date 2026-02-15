@@ -76,10 +76,14 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn new(kind: TokenKind, line: usize, column: usize) -> Self {
+    pub fn new(kind: TokenKind, line: usize, column: usize, end_column: usize) -> Self {
         Token {
             kind,
-            span: Span { line, column },
+            span: Span {
+                line,
+                column,
+                end_column,
+            },
         }
     }
 }

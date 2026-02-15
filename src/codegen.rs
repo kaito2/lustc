@@ -320,7 +320,7 @@ impl CodeGen {
                 self.output.push_str("\")");
             }
             Expr::BoolLit(b) => self.output.push_str(if *b { "true" } else { "false" }),
-            Expr::Var(name) => {
+            Expr::Var(name, _span) => {
                 self.output.push_str(&self.translate_var(name));
             }
             Expr::BinOp { op, lhs, rhs } => {
@@ -422,7 +422,7 @@ impl CodeGen {
         args.reverse();
 
         // Special cases
-        if let Expr::Var(name) = base {
+        if let Expr::Var(name, _span) = base {
             // IO.println → println!("{}", ...)
             if name == "IO.println" {
                 self.output.push_str("println!(\"{}\", ");
@@ -442,7 +442,7 @@ impl CodeGen {
             let translated = self.translate_var(name);
             if translated.contains("::") {
                 self.output.push_str(&translated);
-                if !args.is_empty() && !matches!(args[0], Expr::Var(ref v) if v == "()") {
+                if !args.is_empty() && !matches!(args[0], Expr::Var(ref v, _) if v == "()") {
                     self.output.push('(');
                     for (i, a) in args.iter().enumerate() {
                         if i > 0 {

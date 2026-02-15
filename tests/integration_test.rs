@@ -1,5 +1,27 @@
 use std::process::Command;
 
+fn compile_lean_fail(source: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let lean_path = dir.path().join("test.lean");
+    let rs_path = dir.path().join("test.rs");
+
+    std::fs::write(&lean_path, source).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_lustc"))
+        .arg(lean_path.to_str().unwrap())
+        .arg("-o")
+        .arg(rs_path.to_str().unwrap())
+        .output()
+        .expect("failed to run lustc");
+
+    assert!(
+        !output.status.success(),
+        "lustc should have failed but succeeded"
+    );
+
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
 fn compile_lean(source: &str) -> String {
     let dir = tempfile::tempdir().unwrap();
     let lean_path = dir.path().join("test.lean");
@@ -212,4 +234,43 @@ fn test_lambda() {
 "#,
     );
     assert_eq!(output.trim(), "6");
+}
+
+#[test]
+fn test_undefined_variable_fails() {
+    let stderr = compile_lean_fail("def f (x : Nat) : Nat := y + 1\n");
+    assert!(
+        stderr.contains("undefined variable `y`"),
+        "expected undefined variable error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_multiple_parse_errors_reported() {
+    let stderr = compile_lean_fail("def := 42\ndef := 99\n");
+    // Should contain at least two "error:" lines
+    let error_count = stderr.matches("error:").count();
+    assert!(
+        error_count >= 2,
+        "expected at least 2 errors, got {}: {}",
+        error_count,
+        stderr
+    );
+}
+
+#[test]
+fn test_rich_error_display() {
+    let stderr = compile_lean_fail("def f (x : Nat) : Nat := y + 1\n");
+    // Should contain the source line and caret
+    assert!(
+        stderr.contains("-->"),
+        "expected rich diagnostic with -->, got: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("^"),
+        "expected caret in diagnostic, got: {}",
+        stderr
+    );
 }
