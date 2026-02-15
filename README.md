@@ -89,6 +89,10 @@ Lean4 source → Lexer → Tokens → Parser → AST → CodeGen → Rust source
 cargo test
 ```
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for planned features and milestones.
+
 ## License
 
 MIT
