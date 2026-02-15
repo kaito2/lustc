@@ -1,6 +1,6 @@
 [package]
 name = "lustc"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A Lean4 subset to Rust source-to-source compiler"
 license = "MIT"

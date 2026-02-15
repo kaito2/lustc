@@ -1,10 +1,12 @@
 use crate::ast::*;
 use crate::error::LustcResult;
+use std::collections::HashMap;
 
 pub struct CodeGen {
     output: String,
     indent: usize,
     inductive_names: Vec<String>,
+    struct_fields: HashMap<String, Vec<(String, Type)>>,
 }
 
 impl CodeGen {
@@ -13,14 +15,21 @@ impl CodeGen {
             output: String::new(),
             indent: 0,
             inductive_names: Vec::new(),
+            struct_fields: HashMap::new(),
         }
     }
 
     pub fn generate(&mut self, decls: &[Decl]) -> LustcResult<String> {
-        // First pass: collect inductive type names
+        // First pass: collect inductive type names and struct fields
         for decl in decls {
-            if let Decl::InductiveDef { name, .. } = decl {
-                self.inductive_names.push(name.clone());
+            match decl {
+                Decl::InductiveDef { name, .. } => {
+                    self.inductive_names.push(name.clone());
+                }
+                Decl::StructDef { name, fields } => {
+                    self.struct_fields.insert(name.clone(), fields.clone());
+                }
+                _ => {}
             }
         }
 
@@ -76,6 +85,7 @@ impl CodeGen {
                 cases,
             } => self.gen_fun_def_match(name, params, return_type, cases),
             Decl::InductiveDef { name, constructors } => self.gen_inductive(name, constructors),
+            Decl::StructDef { name, fields } => self.gen_struct(name, fields),
             Decl::Eval(_) => Ok(()), // handled in generate()
         }
     }
@@ -310,6 +320,20 @@ impl CodeGen {
         Ok(())
     }
 
+    fn gen_struct(&mut self, name: &str, fields: &[(String, Type)]) -> LustcResult<()> {
+        self.emit_line("#[derive(Debug, Clone, PartialEq)]");
+        self.emit_line(&format!("struct {} {{", name));
+        self.indent += 1;
+        for (fname, ftype) in fields {
+            self.emit_indent();
+            self.output
+                .push_str(&format!("{}: {},\n", fname, self.type_to_rust(ftype)));
+        }
+        self.indent -= 1;
+        self.emit_line("}");
+        Ok(())
+    }
+
     fn gen_expr(&mut self, expr: &Expr) -> LustcResult<()> {
         match expr {
             Expr::IntLit(n) => self.output.push_str(&n.to_string()),
@@ -403,6 +427,43 @@ impl CodeGen {
                 self.gen_expr(inner)?;
                 self.output.push(')');
             }
+            Expr::Tuple(elems) => {
+                self.output.push('(');
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
+                    self.gen_expr(e)?;
+                }
+                self.output.push(')');
+            }
+            Expr::StringInterpolation(parts) => {
+                self.output.push_str("format!(\"");
+                let mut exprs = Vec::new();
+                for part in parts {
+                    match part {
+                        StringInterpPart::Literal(s) => {
+                            // Escape braces for format! string
+                            self.output.push_str(
+                                &s.replace('{', "{{")
+                                    .replace('}', "}}")
+                                    .replace('\\', "\\\\")
+                                    .replace('"', "\\\""),
+                            );
+                        }
+                        StringInterpPart::Expr(e) => {
+                            self.output.push_str("{}");
+                            exprs.push(e);
+                        }
+                    }
+                }
+                self.output.push('"');
+                for e in exprs {
+                    self.output.push_str(", ");
+                    self.gen_expr(e)?;
+                }
+                self.output.push(')');
+            }
         }
         Ok(())
     }
@@ -436,6 +497,64 @@ impl CodeGen {
                 self.gen_expr(args[0])?;
                 self.output.push_str(".to_string()");
                 return Ok(());
+            }
+
+            // List builtins
+            if name == "List.nil" {
+                self.output.push_str("vec![]");
+                return Ok(());
+            }
+            if name == "List.cons" && args.len() >= 2 {
+                self.output.push_str("{ let mut __v = ");
+                self.gen_expr(args[1])?;
+                self.output.push_str(".clone(); __v.insert(0, ");
+                self.gen_expr(args[0])?;
+                self.output.push_str("); __v }");
+                return Ok(());
+            }
+
+            // Option builtins
+            if name == "Option.none" {
+                self.output.push_str("None");
+                return Ok(());
+            }
+            if name == "Option.some" {
+                self.output.push_str("Some(");
+                self.gen_expr(args[0])?;
+                self.output.push(')');
+                return Ok(());
+            }
+
+            // Struct constructor: Name.mk → Name { f1: a1, f2: a2, ... }
+            if let Some(dot_pos) = name.find('.') {
+                let type_name = &name[..dot_pos];
+                let method = &name[dot_pos + 1..];
+                if method == "mk" {
+                    if let Some(fields) = self.struct_fields.get(type_name).cloned() {
+                        self.output.push_str(&format!("{} {{ ", type_name));
+                        for (i, ((fname, _), arg_expr)) in
+                            fields.iter().zip(args.iter()).enumerate()
+                        {
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
+                            self.output.push_str(&format!("{}: ", fname));
+                            self.gen_expr(arg_expr)?;
+                        }
+                        self.output.push_str(" }");
+                        return Ok(());
+                    }
+                }
+                // Struct field accessor: Name.field arg → arg.field
+                if self.struct_fields.contains_key(type_name) {
+                    if let Some(fields) = self.struct_fields.get(type_name) {
+                        if fields.iter().any(|(f, _)| f == method) {
+                            self.gen_expr(args[0])?;
+                            self.output.push_str(&format!(".{}", method));
+                            return Ok(());
+                        }
+                    }
+                }
             }
 
             // Constructor: qualified name like Color.red → Color::Red
@@ -518,6 +637,25 @@ impl CodeGen {
             Pattern::Var(name) => self.output.push_str(name),
             Pattern::Constructor(name, args) => {
                 let translated = self.translate_constructor(name);
+                // Option pattern mapping
+                if translated == "None" || name == "Option.none" {
+                    self.output.push_str("None");
+                    return Ok(());
+                }
+                if translated.starts_with("Some") || name == "Option.some" {
+                    self.output.push_str("Some");
+                    if !args.is_empty() {
+                        self.output.push('(');
+                        for (i, arg) in args.iter().enumerate() {
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
+                            self.gen_pattern(arg)?;
+                        }
+                        self.output.push(')');
+                    }
+                    return Ok(());
+                }
                 self.output.push_str(&translated);
                 if !args.is_empty() {
                     self.output.push('(');
@@ -534,6 +672,16 @@ impl CodeGen {
             Pattern::Successor(name, _k) => {
                 // In match expressions, successor patterns become catch-all bindings
                 self.output.push_str(name);
+            }
+            Pattern::Tuple(pats) => {
+                self.output.push('(');
+                for (i, p) in pats.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
+                    self.gen_pattern(p)?;
+                }
+                self.output.push(')');
             }
         }
         Ok(())
@@ -557,32 +705,62 @@ impl CodeGen {
                     self.type_to_rust(to)
                 )
             }
-            Type::App(base, _arg) => {
+            Type::App(base, arg) => {
                 // IO Unit → () for return types, etc.
                 if let Type::Named(name) = base.as_ref() {
                     if name == "IO" {
                         return "()".to_string();
                     }
+                    if name == "List" {
+                        return format!("Vec<{}>", self.type_to_rust(arg));
+                    }
+                    if name == "Option" {
+                        return format!("Option<{}>", self.type_to_rust(arg));
+                    }
                 }
                 self.type_to_rust(base)
+            }
+            Type::Tuple(types) => {
+                let inner: Vec<String> = types.iter().map(|t| self.type_to_rust(t)).collect();
+                format!("({})", inner.join(", "))
             }
             Type::Unit => "()".to_string(),
         }
     }
 
     fn translate_var(&self, name: &str) -> String {
-        // Handle qualified names for constructors
-        if let Some(dot_pos) = name.find('.') {
+        // Handle tuple field access: p.1 → p.0 (1-indexed → 0-indexed)
+        if let Some(dot_pos) = name.rfind('.') {
+            let obj = &name[..dot_pos];
+            let field = &name[dot_pos + 1..];
+            if let Ok(idx) = field.parse::<usize>() {
+                let rust_idx = idx.saturating_sub(1);
+                return format!("{}.{}", obj, rust_idx);
+            }
+            // Check for struct field access
+            // We need to find the type name - check if obj itself has a dot
             let type_name = &name[..dot_pos];
             let ctor_name = &name[dot_pos + 1..];
             if self.inductive_names.contains(&type_name.to_string()) {
                 return format!("{}::{}", type_name, to_pascal_case(ctor_name));
             }
         }
-        name.to_string()
+        // List/Option builtins that appear as bare Var (no args)
+        match name {
+            "List.nil" => "vec![]".to_string(),
+            "Option.none" => "None".to_string(),
+            _ => name.to_string(),
+        }
     }
 
     fn translate_constructor(&self, name: &str) -> String {
+        // Option constructor patterns
+        if name == "Option.none" {
+            return "None".to_string();
+        }
+        if name == "Option.some" {
+            return "Some".to_string();
+        }
         // Handle qualified constructor names like Color.red → Color::Red
         if let Some(dot_pos) = name.find('.') {
             let type_name = &name[..dot_pos];
@@ -727,5 +905,53 @@ mod tests {
             "String"
         );
         assert_eq!(cg.type_to_rust(&Type::Unit), "()");
+    }
+
+    #[test]
+    fn test_struct_generation() {
+        let result = compile("structure Point where\n  x : Nat\n  y : Nat");
+        assert!(result.contains("struct Point"));
+        assert!(result.contains("x: u64"));
+        assert!(result.contains("y: u64"));
+        assert!(result.contains("#[derive(Debug, Clone, PartialEq)]"));
+    }
+
+    #[test]
+    fn test_tuple_type_conversion() {
+        let cg = CodeGen::new();
+        let tuple_type = Type::Tuple(vec![
+            Type::Named("Nat".to_string()),
+            Type::Named("Bool".to_string()),
+        ]);
+        assert_eq!(cg.type_to_rust(&tuple_type), "(u64, bool)");
+    }
+
+    #[test]
+    fn test_list_type_conversion() {
+        let cg = CodeGen::new();
+        let list_type = Type::App(
+            Box::new(Type::Named("List".to_string())),
+            Box::new(Type::Named("Nat".to_string())),
+        );
+        assert_eq!(cg.type_to_rust(&list_type), "Vec<u64>");
+    }
+
+    #[test]
+    fn test_option_type_conversion() {
+        let cg = CodeGen::new();
+        let opt_type = Type::App(
+            Box::new(Type::Named("Option".to_string())),
+            Box::new(Type::Named("Nat".to_string())),
+        );
+        assert_eq!(cg.type_to_rust(&opt_type), "Option<u64>");
+    }
+
+    #[test]
+    fn test_string_interpolation_codegen() {
+        let result = compile(r#"def main : IO Unit := do
+  let name := "world"
+  IO.println s!"Hello, {name}!""#);
+        assert!(result.contains("format!("));
+        assert!(result.contains("Hello, {}!"));
     }
 }

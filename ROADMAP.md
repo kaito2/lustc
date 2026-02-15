@@ -1,19 +1,19 @@
 # lustc Roadmap
 
-## v0.2.0 — Error Experience
+## v0.2.0 — Error Experience ✅
 
 - Source-location-aware error messages (line number, source line display)
 - Parser error recovery (report multiple errors instead of stopping at the first)
 - Undefined variable/function detection (add a simple name resolution pass)
 
-## v0.3.0 — Language Feature Expansion
+## v0.3.0 — Language Feature Expansion ✅
 
-- `structure` definitions → Rust `struct`
-- Constructors with fields (`| cons : Nat → List Nat → List Nat`)
-- Tuples `(a, b)` and tuple types `Nat × Nat`
-- `where` clause local definitions (`def f ... where helper := ...`)
-- String interpolation `s!"..."` → `format!(...)`
-- `List` / `Option` type mapping → `Vec<T>` / `Option<T>`
+- `structure` definitions → Rust `struct` (with `Name.mk` constructor and `Name.field` accessor)
+- Constructors with fields (`| cons : Nat → List Nat → List Nat`) — type application in field types
+- Tuples `(a, b)` and tuple types `Nat × Nat`, tuple pattern matching, 1-indexed → 0-indexed field access
+- `where` clause local definitions (`def f ... where helper := ...`) — desugared to `let`
+- String interpolation `s!"..."` → `format!(...)` with embedded expression parsing
+- `List` / `Option` type mapping → `Vec<T>` / `Option<T>` with builtin constructors and pattern matching
 
 ## v0.4.0 — Type Checker
 

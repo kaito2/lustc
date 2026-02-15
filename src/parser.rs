@@ -37,17 +37,27 @@ impl Parser {
         }
     }
 
+    pub fn parse_single_expr(&mut self) -> LustcResult<Expr> {
+        self.parse_expr()
+    }
+
     fn synchronize(&mut self) {
         loop {
-            match self.peek() {
-                TokenKind::Def | TokenKind::Inductive | TokenKind::HashEval | TokenKind::Eof => {
-                    break;
-                }
-                _ => {
-                    self.advance();
-                }
+            if self.is_decl_start() || self.is_at_end() {
+                break;
             }
+            self.advance();
         }
+    }
+
+    fn is_decl_start(&self) -> bool {
+        matches!(
+            self.peek(),
+            TokenKind::Def
+                | TokenKind::Inductive
+                | TokenKind::Structure
+                | TokenKind::HashEval
+        )
     }
 
     // --- Token navigation ---
@@ -108,6 +118,7 @@ impl Parser {
         match self.peek() {
             TokenKind::Def => self.parse_def(),
             TokenKind::Inductive => self.parse_inductive(),
+            TokenKind::Structure => self.parse_structure(),
             TokenKind::HashEval => self.parse_eval(),
             _ => Err(CompilerError::ParseError {
                 msg: format!("expected declaration, found {:?}", self.peek()),
@@ -146,6 +157,8 @@ impl Parser {
             self.advance();
             self.skip_newlines();
             let body = self.parse_expr()?;
+            // Check for where clause after body
+            let body = self.parse_where_clauses(body)?;
             Ok(Decl::FunDef {
                 name,
                 params,
@@ -178,6 +191,64 @@ impl Parser {
                 span: self.peek_span(),
             })
         }
+    }
+
+    fn parse_where_clauses(&mut self, body: Expr) -> LustcResult<Expr> {
+        let mut all_bindings = Vec::new();
+
+        loop {
+            self.skip_newlines();
+            if !self.check(&TokenKind::Where) {
+                break;
+            }
+            self.advance(); // consume 'where'
+            self.skip_newlines();
+
+            // Consume indent if present
+            if self.check(&TokenKind::Indent) {
+                self.advance();
+            }
+
+            // Parse where bindings: name := expr
+            loop {
+                self.skip_newlines_only();
+                if self.is_at_end()
+                    || self.check(&TokenKind::Dedent)
+                    || self.is_decl_start()
+                    || self.check(&TokenKind::Where)
+                {
+                    break;
+                }
+                let binding_name = self.parse_ident()?;
+                self.expect(&TokenKind::ColonEq)?;
+                self.skip_newlines_only();
+                let value = self.parse_expr()?;
+                all_bindings.push((binding_name, value));
+                self.skip_newlines_only();
+            }
+
+            // Consume dedent if present
+            if self.check(&TokenKind::Dedent) {
+                self.advance();
+            }
+        }
+
+        if all_bindings.is_empty() {
+            return Ok(body);
+        }
+
+        // Wrap body with let bindings (innermost first)
+        let mut result = body;
+        for (name, value) in all_bindings.into_iter().rev() {
+            result = Expr::Let {
+                name,
+                ty: None,
+                value: Box::new(value),
+                body: Box::new(result),
+            };
+        }
+
+        Ok(result)
     }
 
     fn parse_match_cases(&mut self) -> LustcResult<Vec<(Vec<Pattern>, Expr)>> {
@@ -231,13 +302,13 @@ impl Parser {
                 self.advance();
                 // Parse types until we hit something that's not a type continuation
                 loop {
-                    let ty = self.parse_type_atom()?;
+                    let ty = self.parse_type_app()?;
                     // If next is Arrow, this is a parameter type
                     if self.check(&TokenKind::Arrow) {
                         fields.push(ty);
                         self.advance(); // consume ->
                                         // Check if the next type is the result type (same as inductive name)
-                        let next_ty = self.parse_type_atom()?;
+                        let next_ty = self.parse_type_app()?;
                         if !self.check(&TokenKind::Arrow) {
                             // This is the return type, don't add to fields
                             let _ = next_ty;
@@ -268,6 +339,41 @@ impl Parser {
         Ok(Decl::InductiveDef { name, constructors })
     }
 
+    fn parse_structure(&mut self) -> LustcResult<Decl> {
+        self.expect(&TokenKind::Structure)?;
+        let name = self.parse_ident()?;
+        self.expect(&TokenKind::Where)?;
+        self.skip_newlines();
+
+        // Consume indent if present
+        if self.check(&TokenKind::Indent) {
+            self.advance();
+        }
+
+        let mut fields = Vec::new();
+        loop {
+            self.skip_newlines_only();
+            if self.is_at_end()
+                || self.check(&TokenKind::Dedent)
+                || self.is_decl_start()
+            {
+                break;
+            }
+            let field_name = self.parse_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            let field_type = self.parse_type()?;
+            fields.push((field_name, field_type));
+            self.skip_newlines_only();
+        }
+
+        // Consume dedent if present
+        if self.check(&TokenKind::Dedent) {
+            self.advance();
+        }
+
+        Ok(Decl::StructDef { name, fields })
+    }
+
     fn parse_eval(&mut self) -> LustcResult<Decl> {
         self.expect(&TokenKind::HashEval)?;
         self.skip_newlines();
@@ -278,13 +384,27 @@ impl Parser {
     // --- Type parsers ---
 
     fn parse_type(&mut self) -> LustcResult<Type> {
-        let lhs = self.parse_type_app()?;
+        let lhs = self.parse_type_product()?;
         if self.check(&TokenKind::Arrow) {
             self.advance();
             let rhs = self.parse_type()?;
             Ok(Type::Arrow(Box::new(lhs), Box::new(rhs)))
         } else {
             Ok(lhs)
+        }
+    }
+
+    fn parse_type_product(&mut self) -> LustcResult<Type> {
+        let first = self.parse_type_app()?;
+        if self.check(&TokenKind::Times) {
+            let mut types = vec![first];
+            while self.check(&TokenKind::Times) {
+                self.advance();
+                types.push(self.parse_type_app()?);
+            }
+            Ok(Type::Tuple(types))
+        } else {
+            Ok(first)
         }
     }
 
@@ -477,6 +597,7 @@ impl Parser {
             self.peek(),
             TokenKind::IntLit(_)
                 | TokenKind::StringLit(_)
+                | TokenKind::InterpolatedString(_)
                 | TokenKind::True
                 | TokenKind::False
                 | TokenKind::LParen
@@ -493,6 +614,11 @@ impl Parser {
                 let s = s.clone();
                 self.advance();
                 Ok(Expr::StringLit(s))
+            }
+            TokenKind::InterpolatedString(ref content) => {
+                let content = content.clone();
+                self.advance();
+                self.parse_interpolated_string(&content)
             }
             TokenKind::True => {
                 self.advance();
@@ -511,8 +637,14 @@ impl Parser {
                     let mut qualified = name;
                     while self.check(&TokenKind::Dot) {
                         self.advance();
-                        let part = self.parse_ident()?;
-                        qualified = format!("{}.{}", qualified, part);
+                        // Handle numeric field access for tuples (e.g. p.1)
+                        if let TokenKind::IntLit(n) = self.peek().clone() {
+                            self.advance();
+                            qualified = format!("{}.{}", qualified, n);
+                        } else {
+                            let part = self.parse_ident()?;
+                            qualified = format!("{}.{}", qualified, part);
+                        }
                     }
                     Ok(Expr::Var(qualified, span))
                 } else {
@@ -527,14 +659,81 @@ impl Parser {
                     return Ok(Expr::Var("()".to_string(), span));
                 }
                 let expr = self.parse_expr()?;
-                self.expect(&TokenKind::RParen)?;
-                Ok(Expr::Paren(Box::new(expr)))
+                // Check for tuple: (expr, expr, ...)
+                if self.check(&TokenKind::Comma) {
+                    let mut elements = vec![expr];
+                    while self.check(&TokenKind::Comma) {
+                        self.advance();
+                        elements.push(self.parse_expr()?);
+                    }
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(Expr::Tuple(elements))
+                } else {
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(Expr::Paren(Box::new(expr)))
+                }
             }
             _ => Err(CompilerError::ParseError {
                 msg: format!("expected expression, found {:?}", self.peek()),
                 span: self.peek_span(),
             }),
         }
+    }
+
+    fn parse_interpolated_string(&mut self, content: &str) -> LustcResult<Expr> {
+        let mut parts = Vec::new();
+        let mut literal = String::new();
+        let chars: Vec<char> = content.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            if chars[i] == '{' {
+                // Save accumulated literal
+                if !literal.is_empty() {
+                    parts.push(StringInterpPart::Literal(std::mem::take(&mut literal)));
+                }
+                // Find matching closing brace
+                i += 1;
+                let mut expr_str = String::new();
+                let mut depth = 1;
+                while i < chars.len() && depth > 0 {
+                    if chars[i] == '{' {
+                        depth += 1;
+                    } else if chars[i] == '}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    expr_str.push(chars[i]);
+                    i += 1;
+                }
+                i += 1; // skip closing '}'
+
+                // Parse the expression inside braces using a sub-lexer+parser
+                let mut sub_lexer = crate::lexer::Lexer::new(&expr_str);
+                let sub_tokens = sub_lexer.tokenize().map_err(|e| CompilerError::ParseError {
+                    msg: format!("error in interpolated expression: {}", e),
+                    span: self.peek_span(),
+                })?;
+                let mut sub_parser = Parser::new(sub_tokens);
+                let expr = sub_parser.parse_single_expr().map_err(|e| CompilerError::ParseError {
+                    msg: format!("error in interpolated expression: {}", e),
+                    span: self.peek_span(),
+                })?;
+                parts.push(StringInterpPart::Expr(expr));
+            } else {
+                literal.push(chars[i]);
+                i += 1;
+            }
+        }
+
+        // Save any remaining literal
+        if !literal.is_empty() {
+            parts.push(StringInterpPart::Literal(literal));
+        }
+
+        Ok(Expr::StringInterpolation(parts))
     }
 
     fn parse_if(&mut self) -> LustcResult<Expr> {
@@ -635,9 +834,7 @@ impl Parser {
             self.skip_newlines_only();
             if self.is_at_end()
                 || self.check(&TokenKind::Dedent)
-                || self.check(&TokenKind::Def)
-                || self.check(&TokenKind::Inductive)
-                || self.check(&TokenKind::HashEval)
+                || self.is_decl_start()
             {
                 break;
             }
@@ -761,8 +958,19 @@ impl Parser {
             TokenKind::LParen => {
                 self.advance();
                 let pat = self.parse_pattern()?;
-                self.expect(&TokenKind::RParen)?;
-                Ok(pat)
+                // Check for tuple pattern: (pat, pat, ...)
+                if self.check(&TokenKind::Comma) {
+                    let mut elements = vec![pat];
+                    while self.check(&TokenKind::Comma) {
+                        self.advance();
+                        elements.push(self.parse_pattern()?);
+                    }
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(Pattern::Tuple(elements))
+                } else {
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(pat)
+                }
             }
             _ => Err(CompilerError::ParseError {
                 msg: format!("expected pattern, found {:?}", self.peek()),
@@ -793,8 +1001,19 @@ impl Parser {
             TokenKind::LParen => {
                 self.advance();
                 let pat = self.parse_pattern()?;
-                self.expect(&TokenKind::RParen)?;
-                Ok(pat)
+                // Check for tuple pattern: (pat, pat, ...)
+                if self.check(&TokenKind::Comma) {
+                    let mut elements = vec![pat];
+                    while self.check(&TokenKind::Comma) {
+                        self.advance();
+                        elements.push(self.parse_pattern()?);
+                    }
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(Pattern::Tuple(elements))
+                } else {
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(pat)
+                }
             }
             _ => Err(CompilerError::ParseError {
                 msg: format!("expected pattern atom, found {:?}", self.peek()),
@@ -842,6 +1061,7 @@ fn is_keyword(s: &str) -> bool {
             | "where"
             | "inductive"
             | "fun"
+            | "structure"
             | "true"
             | "false"
     )
@@ -850,7 +1070,7 @@ fn is_keyword(s: &str) -> bool {
 fn is_expr_keyword(s: &str) -> bool {
     matches!(
         s,
-        "if" | "then" | "else" | "match" | "with" | "do" | "let" | "in" | "fun"
+        "if" | "then" | "else" | "match" | "with" | "do" | "let" | "in" | "fun" | "where"
     )
 }
 
@@ -971,6 +1191,78 @@ mod tests {
             }
             Err(e) => panic!("expected Multiple, got {:?}", e),
             Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn test_structure() {
+        let decls = parse("structure Point where\n  x : Nat\n  y : Nat");
+        match &decls[0] {
+            Decl::StructDef { name, fields } => {
+                assert_eq!(name, "Point");
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].0, "x");
+                assert_eq!(fields[1].0, "y");
+            }
+            _ => panic!("expected StructDef"),
+        }
+    }
+
+    #[test]
+    fn test_tuple_expr() {
+        let decls = parse("#eval (1, 2)");
+        match &decls[0] {
+            Decl::Eval(Expr::Tuple(elems)) => {
+                assert_eq!(elems.len(), 2);
+            }
+            other => panic!("expected tuple, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_tuple_type() {
+        let decls = parse("def fst (p : Nat × Nat) : Nat := p");
+        match &decls[0] {
+            Decl::FunDef { params, .. } => {
+                assert!(matches!(&params[0].1, Type::Tuple(ts) if ts.len() == 2));
+            }
+            _ => panic!("expected FunDef"),
+        }
+    }
+
+    #[test]
+    fn test_string_interpolation() {
+        let decls = parse(r#"#eval s!"hello {x}""#);
+        match &decls[0] {
+            Decl::Eval(Expr::StringInterpolation(parts)) => {
+                assert_eq!(parts.len(), 2);
+                assert!(matches!(&parts[0], StringInterpPart::Literal(s) if s == "hello "));
+                assert!(matches!(&parts[1], StringInterpPart::Expr(_)));
+            }
+            other => panic!("expected StringInterpolation, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_where_clause() {
+        let decls = parse("def f (r : Nat) : Nat :=\n  pi * r * r\n  where pi := 3");
+        match &decls[0] {
+            Decl::FunDef { body, .. } => {
+                assert!(matches!(body, Expr::Let { .. }));
+            }
+            _ => panic!("expected FunDef with let from where"),
+        }
+    }
+
+    #[test]
+    fn test_constructor_with_type_app() {
+        let decls = parse("inductive MyList where\n  | nil\n  | cons : Nat → MyList → MyList");
+        match &decls[0] {
+            Decl::InductiveDef { constructors, .. } => {
+                assert_eq!(constructors[1].name, "cons");
+                assert_eq!(constructors[1].fields.len(), 2);
+            }
+            _ => panic!("expected InductiveDef"),
         }
     }
 }

@@ -10,11 +10,16 @@ A Lean4 subset to Rust source-to-source compiler, written in Rust.
 - Arithmetic, comparison, and logical operators
 - Pattern matching (`match ... with`), successor patterns (`n + 1`)
 - Simple inductive types (`inductive ... where`) → Rust `enum`
+- `structure` definitions → Rust `struct` (with `.mk` constructor and field accessors)
 - `do` blocks (IO), `IO.println` → `println!`
 - `#eval` → `main` with `println!`
 - `toString` → `.to_string()`
 - Unicode arrows (`→`, `←`) and ASCII equivalents (`->`, `<-`)
 - Lambda expressions (`fun x => ...`)
+- Tuples `(a, b)` and tuple types `Nat × Nat`
+- `where` clause local definitions
+- String interpolation `s!"..."` → `format!(...)`
+- `List` / `Option` type mapping → `Vec<T>` / `Option<T>`
 
 ## Installation
 
@@ -77,10 +82,47 @@ def main : IO Unit := do
   IO.println (colorName Color.red)
 ```
 
+### Structures
+
+```lean
+structure Point where
+  x : Nat
+  y : Nat
+
+def main : IO Unit := do
+  let p := Point.mk 10 20
+  IO.println (toString (Point.x p))
+```
+
+### Tuples and String Interpolation
+
+```lean
+def main : IO Unit := do
+  let p := (3, 4)
+  IO.println s!"x = {p.1}, y = {p.2}"
+```
+
+### Where Clause
+
+```lean
+def circleArea (r : Nat) : Nat :=
+  pi * r * r
+  where pi := 3
+```
+
+### Option Type
+
+```lean
+def showOpt (o : Option Nat) : String :=
+  match o with
+  | Option.none => "nothing"
+  | Option.some x => s!"got {x}"
+```
+
 ## Compiler Pipeline
 
 ```
-Lean4 source → Lexer → Tokens → Parser → AST → CodeGen → Rust source
+Lean4 source → Lexer → Tokens → Parser → AST → Resolver → CodeGen → Rust source
 ```
 
 ## Running Tests

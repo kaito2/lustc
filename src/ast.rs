@@ -16,6 +16,10 @@ pub enum Decl {
         name: String,
         constructors: Vec<Constructor>,
     },
+    StructDef {
+        name: String,
+        fields: Vec<(String, Type)>,
+    },
     Eval(Expr),
 }
 
@@ -68,6 +72,14 @@ pub enum Expr {
         body: Box<Expr>,
     },
     Paren(Box<Expr>),
+    Tuple(Vec<Expr>),
+    StringInterpolation(Vec<StringInterpPart>),
+}
+
+#[derive(Debug, Clone)]
+pub enum StringInterpPart {
+    Literal(String),
+    Expr(Expr),
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +116,7 @@ pub enum Type {
     Named(String),
     Arrow(Box<Type>, Box<Type>),
     App(Box<Type>, Box<Type>),
+    Tuple(Vec<Type>),
     Unit,
 }
 
@@ -114,6 +127,7 @@ pub enum Pattern {
     Constructor(String, Vec<Pattern>),
     Wildcard,
     Successor(String, u64),
+    Tuple(Vec<Pattern>),
 }
 
 #[derive(Debug, Clone)]

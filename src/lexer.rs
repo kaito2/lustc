@@ -131,6 +131,12 @@ impl Lexer {
             self.advance_char();
             return Ok(tok);
         }
+        if ch == '×' {
+            let col = self.column;
+            let tok = Token::new(TokenKind::Times, self.line, col, col + 1);
+            self.advance_char();
+            return Ok(tok);
+        }
 
         // Operators and delimiters
         self.lex_operator()
@@ -355,6 +361,18 @@ impl Lexer {
         }
 
         let end_col = start_col + name.len();
+
+        // Check for s!"..." string interpolation
+        if name == "s"
+            && !self.is_at_end()
+            && self.peek_char() == '!'
+            && self.peek_char_at(1) == Some('"')
+        {
+            self.advance_char(); // consume '!'
+            self.advance_char(); // consume '"'
+            return self.lex_interpolated_string(start_line, start_col);
+        }
+
         let kind = match name.as_str() {
             "def" => TokenKind::Def,
             "let" => TokenKind::Let,
@@ -368,6 +386,7 @@ impl Lexer {
             "where" => TokenKind::Where,
             "inductive" => TokenKind::Inductive,
             "fun" => TokenKind::Fun,
+            "structure" => TokenKind::Structure,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             _ => TokenKind::Ident(name),
@@ -484,6 +503,68 @@ impl Lexer {
         };
 
         Ok(Token::new(kind, start_line, start_col, end_col))
+    }
+
+    fn lex_interpolated_string(
+        &mut self,
+        start_line: usize,
+        start_col: usize,
+    ) -> LustcResult<Token> {
+        // We've already consumed s!"
+        // Collect the raw content until the closing "
+        let mut content = String::new();
+        while !self.is_at_end() && self.peek_char() != '"' {
+            let ch = self.peek_char();
+            if ch == '\\' {
+                self.advance_char();
+                if self.is_at_end() {
+                    return Err(CompilerError::LexError {
+                        msg: "unterminated interpolated string".to_string(),
+                        span: Span {
+                            line: start_line,
+                            column: start_col,
+                            end_column: self.column,
+                        },
+                    });
+                }
+                match self.peek_char() {
+                    'n' => content.push('\n'),
+                    't' => content.push('\t'),
+                    '\\' => content.push('\\'),
+                    '"' => content.push('"'),
+                    '{' => content.push('{'),
+                    '}' => content.push('}'),
+                    other => {
+                        content.push('\\');
+                        content.push(other);
+                    }
+                }
+                self.advance_char();
+            } else {
+                content.push(ch);
+                self.advance_char();
+            }
+        }
+
+        if self.is_at_end() {
+            return Err(CompilerError::LexError {
+                msg: "unterminated interpolated string".to_string(),
+                span: Span {
+                    line: start_line,
+                    column: start_col,
+                    end_column: self.column,
+                },
+            });
+        }
+
+        self.advance_char(); // consume closing "
+        let end_col = self.column;
+        Ok(Token::new(
+            TokenKind::InterpolatedString(content),
+            start_line,
+            start_col,
+            end_col,
+        ))
     }
 
     fn peek_char(&self) -> char {

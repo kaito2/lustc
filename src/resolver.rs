@@ -12,6 +12,10 @@ impl Resolver {
             "IO.println".to_string(),
             "toString".to_string(),
             "()".to_string(),
+            "List.nil".to_string(),
+            "List.cons".to_string(),
+            "Option.none".to_string(),
+            "Option.some".to_string(),
         ];
         Resolver {
             scopes: vec![builtins],
@@ -33,6 +37,15 @@ impl Resolver {
                         // Register both unqualified and qualified constructor names
                         top_level.push(ctor.name.clone());
                         top_level.push(format!("{}.{}", name, ctor.name));
+                    }
+                }
+                Decl::StructDef { name, fields } => {
+                    top_level.push(name.clone());
+                    // Register Name.mk constructor
+                    top_level.push(format!("{}.mk", name));
+                    // Register Name.field accessors
+                    for (fname, _) in fields {
+                        top_level.push(format!("{}.{}", name, fname));
                     }
                 }
                 Decl::Eval(_) => {}
@@ -82,6 +95,7 @@ impl Resolver {
                 self.pop_scope();
             }
             Decl::InductiveDef { .. } => {}
+            Decl::StructDef { .. } => {}
             Decl::Eval(expr) => {
                 self.resolve_expr(expr);
             }
@@ -92,10 +106,20 @@ impl Resolver {
         match expr {
             Expr::Var(name, span) => {
                 if !self.is_defined(name) {
-                    self.errors.push(CompilerError::ResolveError {
-                        msg: format!("undefined variable `{}`", name),
-                        span: span.clone(),
-                    });
+                    // Handle tuple field access: p.1, p.2 → check base 'p'
+                    let is_tuple_access = if let Some(dot_pos) = name.rfind('.') {
+                        let field = &name[dot_pos + 1..];
+                        let base = &name[..dot_pos];
+                        field.parse::<usize>().is_ok() && self.is_defined(base)
+                    } else {
+                        false
+                    };
+                    if !is_tuple_access {
+                        self.errors.push(CompilerError::ResolveError {
+                            msg: format!("undefined variable `{}`", name),
+                            span: span.clone(),
+                        });
+                    }
                 }
             }
             Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_) => {}
@@ -161,6 +185,18 @@ impl Resolver {
             Expr::Paren(inner) => {
                 self.resolve_expr(inner);
             }
+            Expr::Tuple(elems) => {
+                for e in elems {
+                    self.resolve_expr(e);
+                }
+            }
+            Expr::StringInterpolation(parts) => {
+                for part in parts {
+                    if let StringInterpPart::Expr(e) = part {
+                        self.resolve_expr(e);
+                    }
+                }
+            }
         }
     }
 
@@ -173,6 +209,11 @@ impl Resolver {
                 }
             }
             Pattern::Successor(name, _) => self.define(name.clone()),
+            Pattern::Tuple(pats) => {
+                for p in pats {
+                    self.define_pattern_vars(p);
+                }
+            }
             Pattern::IntLit(_) | Pattern::Wildcard => {}
         }
     }
@@ -290,5 +331,23 @@ def f (c : Color) : Nat :=
     fn test_pattern_match_function_def() {
         let src = "def factorial : Nat → Nat\n  | 0 => 1\n  | n + 1 => (n + 1) * factorial n";
         assert!(resolve(src).is_ok());
+    }
+
+    #[test]
+    fn test_struct_names_resolved() {
+        let src = r#"structure Point where
+  x : Nat
+  y : Nat
+
+def origin : Point := Point.mk 0 0"#;
+        assert!(resolve(src).is_ok());
+    }
+
+    #[test]
+    fn test_list_option_builtins() {
+        assert!(resolve("#eval List.nil").is_ok());
+        assert!(resolve("#eval List.cons 1 List.nil").is_ok());
+        assert!(resolve("#eval Option.none").is_ok());
+        assert!(resolve("#eval Option.some 42").is_ok());
     }
 }

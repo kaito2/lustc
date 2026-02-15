@@ -274,3 +274,153 @@ fn test_rich_error_display() {
         stderr
     );
 }
+
+// --- v0.3.0: Structure definition ---
+
+#[test]
+fn test_structure_definition() {
+    let rust = compile_lean(
+        r#"structure Point where
+  x : Nat
+  y : Nat
+"#,
+    );
+    assert!(rust.contains("#[derive(Debug, Clone, PartialEq)]"));
+    assert!(rust.contains("struct Point"));
+    assert!(rust.contains("x: u64"));
+    assert!(rust.contains("y: u64"));
+}
+
+#[test]
+fn test_structure_constructor_and_field_access() {
+    let output = compile_and_run(
+        r#"structure Point where
+  x : Nat
+  y : Nat
+
+def main : IO Unit := do
+  let p := Point.mk 10 20
+  IO.println (toString (Point.x p))
+  IO.println (toString (Point.y p))
+"#,
+    );
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "10");
+    assert_eq!(lines[1], "20");
+}
+
+// --- v0.3.0: Tuple support ---
+
+#[test]
+fn test_tuple_creation_and_access() {
+    let output = compile_and_run(
+        r#"def fst (p : Nat × Nat) : Nat := p.1
+def snd (p : Nat × Nat) : Nat := p.2
+
+def main : IO Unit := do
+  IO.println (toString (fst (10, 20)))
+  IO.println (toString (snd (10, 20)))
+"#,
+    );
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "10");
+    assert_eq!(lines[1], "20");
+}
+
+// --- v0.3.0: String interpolation ---
+
+#[test]
+fn test_string_interpolation() {
+    let output = compile_and_run(
+        r#"def main : IO Unit := do
+  let name := "World"
+  IO.println s!"Hello, {name}!"
+"#,
+    );
+    assert_eq!(output.trim(), "Hello, World!");
+}
+
+#[test]
+fn test_string_interpolation_with_expr() {
+    let output = compile_and_run(
+        r#"def main : IO Unit := do
+  let x := 3
+  let y := 4
+  IO.println s!"{x} + {y} = {x + y}"
+"#,
+    );
+    assert_eq!(output.trim(), "3 + 4 = 7");
+}
+
+// --- v0.3.0: Where clause ---
+
+#[test]
+fn test_where_clause() {
+    let output = compile_and_run(
+        r#"def circleArea (r : Nat) : Nat :=
+  pi * r * r
+  where pi := 3
+
+def main : IO Unit := do
+  IO.println (toString (circleArea 5))
+"#,
+    );
+    assert_eq!(output.trim(), "75");
+}
+
+// --- v0.3.0: List/Option type mapping ---
+
+#[test]
+fn test_option_some_none() {
+    let output = compile_and_run(
+        r#"def showOpt (o : Option Nat) : String :=
+  match o with
+  | Option.none => "nothing"
+  | Option.some x => s!"got {x}"
+
+def main : IO Unit := do
+  IO.println (showOpt (Option.some 42))
+  IO.println (showOpt Option.none)
+"#,
+    );
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "got 42");
+    assert_eq!(lines[1], "nothing");
+}
+
+// --- v0.3.0: Constructor enhancement ---
+
+#[test]
+fn test_inductive_with_type_app_fields() {
+    let rust = compile_lean(
+        r#"inductive MyList where
+  | nil
+  | cons : Nat → MyList → MyList
+"#,
+    );
+    assert!(rust.contains("enum MyList"));
+    assert!(rust.contains("Nil"));
+    assert!(rust.contains("Cons(u64, MyList)"));
+}
+
+// --- v0.3.0: Cross-feature integration ---
+
+#[test]
+fn test_cross_feature_struct_where_interpolation() {
+    let output = compile_and_run(
+        r#"structure Point where
+  x : Nat
+  y : Nat
+
+def describe (p : Point) : String :=
+  s!"({px}, {py})"
+  where px := Point.x p
+  where py := Point.y p
+
+def main : IO Unit := do
+  let p := Point.mk 3 7
+  IO.println (describe p)
+"#,
+    );
+    assert_eq!(output.trim(), "(3, 7)");
+}

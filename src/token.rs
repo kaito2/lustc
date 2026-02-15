@@ -15,10 +15,12 @@ pub enum TokenKind {
     Where,
     Inductive,
     Fun,
+    Structure,
 
     // Literals
     IntLit(u64),
     StringLit(String),
+    InterpolatedString(String),
     True,
     False,
 
@@ -47,6 +49,9 @@ pub enum TokenKind {
     Arrow,     // → or ->
     LeftArrow, // ← or <-
     FatArrow,  // =>
+
+    // Product type operator
+    Times, // ×
 
     // Delimiters
     LParen,
