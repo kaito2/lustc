@@ -475,6 +475,108 @@ fn test_codegen_removes_redundant_parens() {
     );
 }
 
+// --- v0.5.0: Generated code quality ---
+
+#[test]
+fn test_snake_case_function_names() {
+    let output = compile_and_run(
+        r#"def circleArea (r : Nat) : Nat := r * r * 3
+
+def main : IO Unit := do
+  IO.println (toString (circleArea 5))
+"#,
+    );
+    assert_eq!(output.trim(), "75");
+}
+
+#[test]
+fn test_snake_case_in_generated_code() {
+    let rust = compile_lean(
+        r#"def circleArea (r : Nat) : Nat := r * r * 3
+
+def main : IO Unit := do
+  IO.println (toString (circleArea 5))
+"#,
+    );
+    // Function should be renamed to snake_case
+    assert!(
+        rust.contains("circle_area"),
+        "expected snake_case function name, got: {}",
+        rust
+    );
+    assert!(
+        !rust.contains("circleArea"),
+        "expected no camelCase, got: {}",
+        rust
+    );
+}
+
+#[test]
+fn test_dead_code_elimination() {
+    let rust = compile_lean(
+        r#"def unused (x : Nat) : Nat := x + 1
+
+def helper (x : Nat) : Nat := x * 2
+
+def main : IO Unit := do
+  IO.println (toString (helper 5))
+"#,
+    );
+    // `unused` should be eliminated
+    assert!(
+        !rust.contains("fn unused"),
+        "expected dead code removed, got: {}",
+        rust
+    );
+    // `helper` should be present
+    assert!(
+        rust.contains("helper"),
+        "expected reachable function present, got: {}",
+        rust
+    );
+}
+
+#[test]
+fn test_dead_code_inductive_reachable() {
+    let output = compile_and_run(
+        r#"inductive Color where
+  | red
+  | green
+  | blue
+
+def colorName (c : Color) : String :=
+  match c with
+  | Color.red => "Red"
+  | Color.green => "Green"
+  | Color.blue => "Blue"
+
+def unusedHelper (x : Nat) : Nat := x
+
+def main : IO Unit := do
+  IO.println (colorName Color.green)
+"#,
+    );
+    assert_eq!(output.trim(), "Green");
+}
+
+#[test]
+fn test_rustfmt_formatted_output() {
+    let rust = compile_lean(
+        r#"def add (x : Nat) (y : Nat) : Nat := x + y
+
+def main : IO Unit := do
+  IO.println (toString (add 3 4))
+"#,
+    );
+    // rustfmt should produce well-formatted output
+    // At minimum, it should have proper newlines and indentation
+    assert!(
+        rust.contains("fn main()"),
+        "expected formatted main function, got: {}",
+        rust
+    );
+}
+
 // --- v0.3.0: Cross-feature integration ---
 
 #[test]

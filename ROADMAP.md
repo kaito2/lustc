@@ -21,7 +21,7 @@
 - Type mismatch error reporting (catch errors before code generation)
 - Remove unnecessary `.to_string()` and redundant parentheses from generated code
 
-## v0.5.0 — Generated Code Quality
+## v0.5.0 — Generated Code Quality ✅
 
 - `cargo fmt`-equivalent formatted output
 - Automatic `snake_case` conversion (Lean's `camelCase` function names → Rust convention)

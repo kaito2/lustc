@@ -9,6 +9,7 @@ mod typechecker;
 
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process;
 
@@ -36,7 +37,39 @@ fn compile(source: &str) -> LustcResult<String> {
         .map_err(CompilerError::Multiple)?;
 
     let mut codegen = CodeGen::new();
-    codegen.generate(&decls)
+    let raw_output = codegen.generate(&decls)?;
+
+    // Post-process with rustfmt for cargo fmt-equivalent output
+    Ok(format_with_rustfmt(&raw_output))
+}
+
+fn format_with_rustfmt(code: &str) -> String {
+    let mut child = match process::Command::new("rustfmt")
+        .arg("--edition")
+        .arg("2021")
+        .stdin(process::Stdio::piped())
+        .stdout(process::Stdio::piped())
+        .stderr(process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return code.to_string(), // rustfmt not available, fall back
+    };
+
+    if let Some(ref mut stdin) = child.stdin {
+        if stdin.write_all(code.as_bytes()).is_err() {
+            return code.to_string();
+        }
+    }
+    // Close stdin so rustfmt can process
+    drop(child.stdin.take());
+
+    match child.wait_with_output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8(output.stdout).unwrap_or_else(|_| code.to_string())
+        }
+        _ => code.to_string(), // Fall back on failure
+    }
 }
 
 fn print_error(error: &CompilerError, source: &str, filename: &str) {

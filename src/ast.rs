@@ -57,7 +57,6 @@ pub enum Expr {
     },
     Let {
         name: String,
-        #[allow(dead_code)]
         ty: Option<Type>,
         value: Box<Expr>,
         body: Box<Expr>,

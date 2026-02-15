@@ -20,6 +20,10 @@ A Lean4 subset to Rust source-to-source compiler, written in Rust.
 - `where` clause local definitions
 - String interpolation `s!"..."` → `format!(...)`
 - `List` / `Option` type mapping → `Vec<T>` / `Option<T>`
+- Type checker with type mismatch error reporting
+- Automatic `camelCase` → `snake_case` conversion for Rust conventions
+- Dead code elimination (unused functions/types removed)
+- `rustfmt`-formatted output
 
 ## Installation
 

@@ -1,6 +1,195 @@
 use crate::ast::*;
 use crate::error::LustcResult;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Collect all identifier names referenced in an expression.
+fn collect_names_expr(expr: &Expr, names: &mut HashSet<String>) {
+    match expr {
+        Expr::Var(name, _) => {
+            names.insert(name.clone());
+            // Also add the base part for qualified names
+            if let Some(dot_pos) = name.find('.') {
+                names.insert(name[..dot_pos].to_string());
+            }
+        }
+        Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_) => {}
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_names_expr(lhs, names);
+            collect_names_expr(rhs, names);
+        }
+        Expr::UnaryOp { operand, .. } => collect_names_expr(operand, names),
+        Expr::FunApp { func, arg } => {
+            collect_names_expr(func, names);
+            collect_names_expr(arg, names);
+        }
+        Expr::If { cond, then_branch, else_branch } => {
+            collect_names_expr(cond, names);
+            collect_names_expr(then_branch, names);
+            collect_names_expr(else_branch, names);
+        }
+        Expr::Let { value, body, .. } => {
+            collect_names_expr(value, names);
+            collect_names_expr(body, names);
+        }
+        Expr::Match { scrutinee, arms } => {
+            collect_names_expr(scrutinee, names);
+            for arm in arms {
+                collect_names_pattern(&arm.pattern, names);
+                collect_names_expr(&arm.body, names);
+            }
+        }
+        Expr::Do(stmts) => {
+            for stmt in stmts {
+                match stmt {
+                    DoStatement::Expr(e) => collect_names_expr(e, names),
+                    DoStatement::Let(_, value) => collect_names_expr(value, names),
+                }
+            }
+        }
+        Expr::Lambda { body, .. } => collect_names_expr(body, names),
+        Expr::Paren(inner) => collect_names_expr(inner, names),
+        Expr::Tuple(elems) => {
+            for e in elems {
+                collect_names_expr(e, names);
+            }
+        }
+        Expr::StringInterpolation(parts) => {
+            for part in parts {
+                if let StringInterpPart::Expr(e) = part {
+                    collect_names_expr(e, names);
+                }
+            }
+        }
+    }
+}
+
+fn collect_names_pattern(pat: &Pattern, names: &mut HashSet<String>) {
+    if let Pattern::Constructor(name, args) = pat {
+        names.insert(name.clone());
+        if let Some(dot_pos) = name.find('.') {
+            names.insert(name[..dot_pos].to_string());
+        }
+        for arg in args {
+            collect_names_pattern(arg, names);
+        }
+    }
+}
+
+/// Compute the set of reachable declaration names starting from entry points.
+fn collect_reachable(decls: &[Decl]) -> HashSet<String> {
+    // Build a map from declaration name → referenced names
+    let mut decl_refs: HashMap<String, HashSet<String>> = HashMap::new();
+    // Track type name → all associated names (constructors, struct, etc.)
+    let mut type_associated: HashMap<String, Vec<String>> = HashMap::new();
+
+    for decl in decls {
+        match decl {
+            Decl::FunDef { name, body, .. } => {
+                let mut refs = HashSet::new();
+                collect_names_expr(body, &mut refs);
+                decl_refs.insert(name.clone(), refs);
+            }
+            Decl::FunDefMatch { name, cases, .. } => {
+                let mut refs = HashSet::new();
+                for (patterns, body) in cases {
+                    for pat in patterns {
+                        collect_names_pattern(pat, &mut refs);
+                    }
+                    collect_names_expr(body, &mut refs);
+                }
+                decl_refs.insert(name.clone(), refs);
+            }
+            Decl::InductiveDef { name, constructors } => {
+                let mut associated = vec![name.clone()];
+                for ctor in constructors {
+                    associated.push(ctor.name.clone());
+                    associated.push(format!("{}.{}", name, ctor.name));
+                }
+                type_associated.insert(name.clone(), associated);
+                decl_refs.insert(name.clone(), HashSet::new());
+            }
+            Decl::StructDef { name, fields } => {
+                let mut associated = vec![name.clone(), format!("{}.mk", name)];
+                for (fname, _) in fields {
+                    associated.push(format!("{}.{}", name, fname));
+                }
+                type_associated.insert(name.clone(), associated);
+                decl_refs.insert(name.clone(), HashSet::new());
+            }
+            Decl::Eval(_) => {} // always reachable
+        }
+    }
+
+    // Entry points: main, #eval
+    let has_entry_point = decls.iter().any(|d| {
+        matches!(d, Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } if name == "main")
+            || matches!(d, Decl::Eval(_))
+    });
+
+    // If there are no entry points, all declarations are reachable
+    if !has_entry_point {
+        let mut all = HashSet::new();
+        for decl in decls {
+            match decl {
+                Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } => {
+                    all.insert(name.clone());
+                }
+                Decl::InductiveDef { name, .. } | Decl::StructDef { name, .. } => {
+                    all.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+        return all;
+    }
+
+    let mut reachable = HashSet::new();
+    let mut worklist = Vec::new();
+
+    for decl in decls {
+        match decl {
+            Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } if name == "main" => {
+                reachable.insert(name.clone());
+                worklist.push(name.clone());
+            }
+            Decl::Eval(expr) => {
+                let mut refs = HashSet::new();
+                collect_names_expr(expr, &mut refs);
+                for r in &refs {
+                    if !reachable.contains(r) {
+                        reachable.insert(r.clone());
+                        worklist.push(r.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Fixed-point: expand reachable set
+    while let Some(name) = worklist.pop() {
+        // Add refs from this declaration
+        if let Some(refs) = decl_refs.get(&name) {
+            for r in refs {
+                if !reachable.contains(r) {
+                    reachable.insert(r.clone());
+                    worklist.push(r.clone());
+                }
+            }
+        }
+        // If this is a type name, mark all associated names as reachable
+        if let Some(associated) = type_associated.get(&name) {
+            for a in associated {
+                if !reachable.contains(a) {
+                    reachable.insert(a.clone());
+                    worklist.push(a.clone());
+                }
+            }
+        }
+    }
+
+    reachable
+}
 
 pub struct CodeGen {
     output: String,
@@ -20,6 +209,9 @@ impl CodeGen {
     }
 
     pub fn generate(&mut self, decls: &[Decl]) -> LustcResult<String> {
+        // Compute reachable declarations for dead code elimination
+        let reachable = collect_reachable(decls);
+
         // First pass: collect inductive type names and struct fields
         for decl in decls {
             match decl {
@@ -47,6 +239,17 @@ impl CodeGen {
             match decl {
                 Decl::Eval(_) => {} // handled below
                 _ => {
+                    // Skip dead code: declarations not reachable from main/#eval
+                    let decl_name = match decl {
+                        Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } => Some(name.as_str()),
+                        Decl::InductiveDef { name, .. } | Decl::StructDef { name, .. } => Some(name.as_str()),
+                        Decl::Eval(_) => None,
+                    };
+                    if let Some(name) = decl_name {
+                        if !reachable.contains(name) {
+                            continue;
+                        }
+                    }
                     self.gen_decl(decl)?;
                     self.output.push('\n');
                 }
@@ -108,14 +311,14 @@ impl CodeGen {
             return Ok(());
         }
 
-        self.emit_str(&format!("fn {}", name));
+        self.emit_str(&format!("fn {}", to_snake_case(name)));
         self.output.push('(');
         for (i, (pname, ptype)) in params.iter().enumerate() {
             if i > 0 {
                 self.output.push_str(", ");
             }
             self.output
-                .push_str(&format!("{}: {}", pname, self.type_to_rust(ptype)));
+                .push_str(&format!("{}: {}", to_snake_case(pname), self.type_to_rust(ptype)));
         }
         self.output.push(')');
 
@@ -210,14 +413,15 @@ impl CodeGen {
             }
         };
 
-        self.emit_str(&format!("fn {}", name));
+        let snake_match_param = to_snake_case(&match_param_name);
+        self.emit_str(&format!("fn {}", to_snake_case(name)));
         self.output.push('(');
 
         for (i, (pname, ptype)) in all_params.iter().enumerate() {
             if i > 0 {
                 self.output.push_str(", ");
             }
-            self.output.push_str(&format!("{}: {}", pname, ptype));
+            self.output.push_str(&format!("{}: {}", to_snake_case(pname), ptype));
         }
         self.output.push(')');
 
@@ -233,7 +437,7 @@ impl CodeGen {
         // Generate match expression
         self.emit_indent();
         self.output
-            .push_str(&format!("match {} {{\n", match_param_name));
+            .push_str(&format!("match {} {{\n", snake_match_param));
         self.indent += 1;
 
         for (patterns, body) in cases {
@@ -241,11 +445,12 @@ impl CodeGen {
             if let Some(pat) = patterns.first() {
                 // Successor pattern: `n + k` → catch-all that rebinds n = n - k
                 if let Pattern::Successor(var, k) = pat {
-                    self.output.push_str(&format!("{} => {{\n", var));
+                    let snake_var = to_snake_case(var);
+                    self.output.push_str(&format!("{} => {{\n", snake_var));
                     self.indent += 1;
                     self.emit_indent();
                     self.output
-                        .push_str(&format!("let {} = {}.saturating_sub({});\n", var, var, k));
+                        .push_str(&format!("let {} = {}.saturating_sub({});\n", snake_var, snake_var, k));
                     self.emit_indent();
                     self.gen_expr(body)?;
                     self.output.push('\n');
@@ -386,7 +591,7 @@ impl CodeGen {
             Expr::Let {
                 name, value, body, ..
             } => {
-                self.output.push_str(&format!("{{ let {} = ", name));
+                self.output.push_str(&format!("{{ let {} = ", to_snake_case(name)));
                 self.gen_expr(value)?;
                 self.output.push_str("; ");
                 self.gen_expr(body)?;
@@ -417,7 +622,7 @@ impl CodeGen {
                     if i > 0 {
                         self.output.push_str(", ");
                     }
-                    self.output.push_str(name);
+                    self.output.push_str(&to_snake_case(name));
                 }
                 self.output.push_str("| ");
                 self.gen_expr(body)?;
@@ -582,7 +787,7 @@ impl CodeGen {
                 return Ok(());
             }
 
-            // Regular function call
+            // Regular function call (snake_case already applied by translate_var)
             self.output.push_str(&translated);
             self.output.push('(');
             for (i, a) in args.iter().enumerate() {
@@ -630,7 +835,7 @@ impl CodeGen {
                 }
                 DoStatement::Let(name, value) => {
                     self.emit_indent();
-                    self.output.push_str(&format!("let {} = ", name));
+                    self.output.push_str(&format!("let {} = ", to_snake_case(name)));
                     self.gen_expr(value)?;
                     self.output.push_str(";\n");
                 }
@@ -642,7 +847,7 @@ impl CodeGen {
     fn gen_pattern(&mut self, pat: &Pattern) -> LustcResult<()> {
         match pat {
             Pattern::IntLit(n) => self.output.push_str(&n.to_string()),
-            Pattern::Var(name) => self.output.push_str(name),
+            Pattern::Var(name) => self.output.push_str(&to_snake_case(name)),
             Pattern::Constructor(name, args) => {
                 let translated = self.translate_constructor(name);
                 // Option pattern mapping
@@ -679,7 +884,7 @@ impl CodeGen {
             Pattern::Wildcard => self.output.push('_'),
             Pattern::Successor(name, _k) => {
                 // In match expressions, successor patterns become catch-all bindings
-                self.output.push_str(name);
+                self.output.push_str(&to_snake_case(name));
             }
             Pattern::Tuple(pats) => {
                 self.output.push('(');
@@ -763,10 +968,9 @@ impl CodeGen {
             let field = &name[dot_pos + 1..];
             if let Ok(idx) = field.parse::<usize>() {
                 let rust_idx = idx.saturating_sub(1);
-                return format!("{}.{}", obj, rust_idx);
+                return format!("{}.{}", to_snake_case(obj), rust_idx);
             }
             // Check for struct field access
-            // We need to find the type name - check if obj itself has a dot
             let type_name = &name[..dot_pos];
             let ctor_name = &name[dot_pos + 1..];
             if self.inductive_names.contains(&type_name.to_string()) {
@@ -777,7 +981,7 @@ impl CodeGen {
         match name {
             "List.nil" => "vec![]".to_string(),
             "Option.none" => "None".to_string(),
-            _ => name.to_string(),
+            _ => to_snake_case(name),
         }
     }
 
@@ -845,6 +1049,21 @@ fn binop_to_rust(op: &BinOp) -> &'static str {
         BinOp::And => "&&",
         BinOp::Or => "||",
     }
+}
+
+fn to_snake_case(s: &str) -> String {
+    let mut result = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i > 0 {
+                result.push('_');
+            }
+            result.push(ch.to_ascii_lowercase());
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 fn to_pascal_case(s: &str) -> String {
@@ -981,5 +1200,30 @@ mod tests {
   IO.println s!"Hello, {name}!""#);
         assert!(result.contains("format!("));
         assert!(result.contains("Hello, {}!"));
+    }
+
+    #[test]
+    fn test_snake_case() {
+        assert_eq!(to_snake_case("circleArea"), "circle_area");
+        assert_eq!(to_snake_case("colorName"), "color_name");
+        assert_eq!(to_snake_case("factorial"), "factorial");
+        assert_eq!(to_snake_case("main"), "main");
+        assert_eq!(to_snake_case("x"), "x");
+        assert_eq!(to_snake_case("showOpt"), "show_opt");
+    }
+
+    #[test]
+    fn test_snake_case_in_output() {
+        let result = compile("def circleArea (r : Nat) : Nat := r * r * 3");
+        assert!(result.contains("fn circle_area(r: u64) -> u64"));
+    }
+
+    #[test]
+    fn test_dead_code_elimination() {
+        let result = compile(
+            "def unused (x : Nat) : Nat := x + 1\ndef helper (x : Nat) : Nat := x * 2\ndef main : IO Unit := do\n  IO.println (toString (helper 5))"
+        );
+        assert!(!result.contains("fn unused"));
+        assert!(result.contains("helper"));
     }
 }
