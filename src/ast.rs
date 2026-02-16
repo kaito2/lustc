@@ -1,3 +1,9 @@
+//! AST types for the Lean4 subset.
+//!
+//! `Decl` covers top-level forms (def, inductive, structure, import, namespace).
+//! `Expr` covers expressions; `Pattern` covers match arm patterns.
+//! `Type` is the surface-level type syntax (distinct from `typechecker::Ty`).
+
 #[derive(Debug, Clone)]
 pub struct ModulePath {
     pub segments: Vec<String>,
@@ -7,7 +13,6 @@ impl ModulePath {
     pub fn to_file_path(&self) -> String {
         format!("{}.lean", self.segments.join("/"))
     }
-
 }
 
 #[derive(Debug, Clone)]

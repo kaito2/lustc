@@ -1,3 +1,8 @@
+//! CLI entry point for lustc.
+//!
+//! Two compile paths: `compile()` takes a single source string (used by tests),
+//! `compile_file()` takes a file path with full import resolution (used by CLI).
+
 mod ast;
 mod codegen;
 mod error;
@@ -31,14 +36,10 @@ fn compile(source: &str) -> LustcResult<String> {
     let decls = parser.parse_program()?;
 
     let resolver = Resolver::new();
-    resolver
-        .resolve(&decls)
-        .map_err(CompilerError::Multiple)?;
+    resolver.resolve(&decls).map_err(CompilerError::Multiple)?;
 
     let checker = TypeChecker::new();
-    checker
-        .check(&decls)
-        .map_err(CompilerError::Multiple)?;
+    checker.check(&decls).map_err(CompilerError::Multiple)?;
 
     let mut codegen = CodeGen::new();
     let raw_output = codegen.generate(&decls)?;

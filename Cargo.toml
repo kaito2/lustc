@@ -1,9 +1,15 @@
 [package]
 name = "lustc"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "A Lean4 subset to Rust source-to-source compiler"
 license = "MIT"
+authors = ["kaito2"]
+repository = "https://github.com/kaito2/lustc"
+homepage = "https://github.com/kaito2/lustc"
+readme = "README.md"
+keywords = ["compiler", "lean4", "transpiler", "source-to-source"]
+categories = ["compilers", "development-tools"]
 
 [dependencies]
 

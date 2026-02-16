@@ -1,3 +1,10 @@
+//! Rust code generation with dead code elimination (DCE).
+//!
+//! Performs reachability analysis from `main`/`#eval` entry points before emitting code.
+//! Name translation: Lean `camelCase` → Rust `snake_case`, constructor names → `PascalCase`,
+//! qualified names like `Color.red` → `Color::Red`, `Math.square` → `math::square`.
+//! Type mapping: `Nat` → `u64`, `String` → `String`, `List T` → `Vec<T>`, etc.
+
 use crate::ast::*;
 use crate::error::LustcResult;
 use std::collections::{HashMap, HashSet};
@@ -22,7 +29,11 @@ fn collect_names_expr(expr: &Expr, names: &mut HashSet<String>) {
             collect_names_expr(func, names);
             collect_names_expr(arg, names);
         }
-        Expr::If { cond, then_branch, else_branch } => {
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             collect_names_expr(cond, names);
             collect_names_expr(then_branch, names);
             collect_names_expr(else_branch, names);
@@ -161,9 +172,7 @@ fn collect_reachable_decls(
                         | Decl::FunDefMatch { name: n, .. }
                         | Decl::InductiveDef { name: n, .. }
                         | Decl::StructDef { name: n, .. }
-                        | Decl::Namespace { name: n, .. } => {
-                            Some(format!("{}.{}", qualified, n))
-                        }
+                        | Decl::Namespace { name: n, .. } => Some(format!("{}.{}", qualified, n)),
                         _ => None,
                     };
                     if let Some(n) = inner_name {
@@ -337,8 +346,12 @@ impl CodeGen {
                 _ => {
                     // Skip dead code: declarations not reachable from main/#eval
                     let decl_name = match decl {
-                        Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } => Some(name.as_str()),
-                        Decl::InductiveDef { name, .. } | Decl::StructDef { name, .. } => Some(name.as_str()),
+                        Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } => {
+                            Some(name.as_str())
+                        }
+                        Decl::InductiveDef { name, .. } | Decl::StructDef { name, .. } => {
+                            Some(name.as_str())
+                        }
                         Decl::Namespace { name, .. } => Some(name.as_str()),
                         Decl::Eval(_) | Decl::Import { .. } | Decl::Open { .. } => None,
                     };
@@ -417,8 +430,11 @@ impl CodeGen {
             if i > 0 {
                 self.output.push_str(", ");
             }
-            self.output
-                .push_str(&format!("{}: {}", to_snake_case(pname), self.type_to_rust(ptype)));
+            self.output.push_str(&format!(
+                "{}: {}",
+                to_snake_case(pname),
+                self.type_to_rust(ptype)
+            ));
         }
         self.output.push(')');
 
@@ -521,7 +537,8 @@ impl CodeGen {
             if i > 0 {
                 self.output.push_str(", ");
             }
-            self.output.push_str(&format!("{}: {}", to_snake_case(pname), ptype));
+            self.output
+                .push_str(&format!("{}: {}", to_snake_case(pname), ptype));
         }
         self.output.push(')');
 
@@ -549,8 +566,10 @@ impl CodeGen {
                     self.output.push_str(&format!("{} => {{\n", snake_var));
                     self.indent += 1;
                     self.emit_indent();
-                    self.output
-                        .push_str(&format!("let {} = {}.saturating_sub({});\n", snake_var, snake_var, k));
+                    self.output.push_str(&format!(
+                        "let {} = {}.saturating_sub({});\n",
+                        snake_var, snake_var, k
+                    ));
                     self.emit_indent();
                     self.gen_expr(body)?;
                     self.output.push('\n');
@@ -650,7 +669,12 @@ impl CodeGen {
                         }
                     }
                 }
-                Decl::FunDefMatch { name, params, return_type, .. } => {
+                Decl::FunDefMatch {
+                    name,
+                    params,
+                    return_type,
+                    ..
+                } => {
                     // FunDefMatch with no explicit params but an Arrow return type
                     // actually takes params from the arrow decomposition — not zero-arg
                     if params.is_empty() && name != "main" {
@@ -763,8 +787,11 @@ impl CodeGen {
                     if i > 0 {
                         self.output.push_str(", ");
                     }
-                    self.output
-                        .push_str(&format!("{}: {}", to_snake_case(pname), self.type_to_rust(ptype)));
+                    self.output.push_str(&format!(
+                        "{}: {}",
+                        to_snake_case(pname),
+                        self.type_to_rust(ptype)
+                    ));
                 }
                 self.output.push(')');
 
@@ -853,7 +880,8 @@ impl CodeGen {
                     if i > 0 {
                         self.output.push_str(", ");
                     }
-                    self.output.push_str(&format!("{}: {}", to_snake_case(pname), ptype));
+                    self.output
+                        .push_str(&format!("{}: {}", to_snake_case(pname), ptype));
                 }
                 self.output.push(')');
                 if let Some(ref ret) = actual_return_type {
@@ -875,8 +903,10 @@ impl CodeGen {
                             self.output.push_str(&format!("{} => {{\n", snake_var));
                             self.indent += 1;
                             self.emit_indent();
-                            self.output
-                                .push_str(&format!("let {} = {}.saturating_sub({});\n", snake_var, snake_var, k));
+                            self.output.push_str(&format!(
+                                "let {} = {}.saturating_sub({});\n",
+                                snake_var, snake_var, k
+                            ));
                             self.emit_indent();
                             self.gen_expr(body)?;
                             self.output.push('\n');
@@ -928,8 +958,11 @@ impl CodeGen {
                 self.indent += 1;
                 for (fname, ftype) in fields {
                     self.emit_indent();
-                    self.output
-                        .push_str(&format!("pub {}: {},\n", fname, self.type_to_rust(ftype)));
+                    self.output.push_str(&format!(
+                        "pub {}: {},\n",
+                        fname,
+                        self.type_to_rust(ftype)
+                    ));
                 }
                 self.indent -= 1;
                 self.emit_line("}");
@@ -994,7 +1027,8 @@ impl CodeGen {
             Expr::Let {
                 name, value, body, ..
             } => {
-                self.output.push_str(&format!("{{ let {} = ", to_snake_case(name)));
+                self.output
+                    .push_str(&format!("{{ let {} = ", to_snake_case(name)));
                 self.gen_expr(value)?;
                 self.output.push_str("; ");
                 self.gen_expr(body)?;
@@ -1238,7 +1272,8 @@ impl CodeGen {
                 }
                 DoStatement::Let(name, value) => {
                     self.emit_indent();
-                    self.output.push_str(&format!("let {} = ", to_snake_case(name)));
+                    self.output
+                        .push_str(&format!("let {} = ", to_snake_case(name)));
                     self.gen_expr(value)?;
                     self.output.push_str(";\n");
                 }
@@ -1307,10 +1342,7 @@ impl CodeGen {
 
     /// Check if an expression is known to produce a String type
     fn is_string_expr(&self, expr: &Expr) -> bool {
-        matches!(
-            expr,
-            Expr::StringLit(_) | Expr::StringInterpolation(_)
-        )
+        matches!(expr, Expr::StringLit(_) | Expr::StringInterpolation(_))
     }
 
     /// Check if an expression is a simple atom that doesn't need parentheses
@@ -1381,7 +1413,8 @@ impl CodeGen {
             }
             // Check for namespace-qualified name
             if self.namespace_names.contains(type_name) {
-                let translated = format!("{}::{}", to_snake_case(type_name), to_snake_case(ctor_name));
+                let translated =
+                    format!("{}::{}", to_snake_case(type_name), to_snake_case(ctor_name));
                 if self.zero_arg_fns.contains(name) {
                     return format!("{}()", translated);
                 }
@@ -1403,7 +1436,9 @@ impl CodeGen {
                     if members.contains(name) {
                         let translated = format!("{}::{}", to_snake_case(ns), to_snake_case(name));
                         let qualified = format!("{}.{}", ns, name);
-                        if self.zero_arg_fns.contains(&qualified) || self.zero_arg_fns.contains(name) {
+                        if self.zero_arg_fns.contains(&qualified)
+                            || self.zero_arg_fns.contains(name)
+                        {
                             return format!("{}()", translated);
                         }
                         return translated;
@@ -1630,9 +1665,11 @@ mod tests {
 
     #[test]
     fn test_string_interpolation_codegen() {
-        let result = compile(r#"def main : IO Unit := do
+        let result = compile(
+            r#"def main : IO Unit := do
   let name := "world"
-  IO.println s!"Hello, {name}!""#);
+  IO.println s!"Hello, {name}!""#,
+        );
         assert!(result.contains("format!("));
         assert!(result.contains("Hello, {}!"));
     }
@@ -1651,6 +1688,30 @@ mod tests {
     fn test_snake_case_in_output() {
         let result = compile("def circleArea (r : Nat) : Nat := r * r * 3");
         assert!(result.contains("fn circle_area(r: u64) -> u64"));
+    }
+
+    #[test]
+    fn test_to_snake_case_edge_cases() {
+        assert_eq!(to_snake_case(""), "");
+        assert_eq!(to_snake_case("x"), "x");
+        assert_eq!(to_snake_case("X"), "x");
+        assert_eq!(to_snake_case("AB"), "a_b");
+    }
+
+    #[test]
+    fn test_to_pascal_case_edge_cases() {
+        assert_eq!(to_pascal_case(""), "");
+        assert_eq!(to_pascal_case("x"), "X");
+        assert_eq!(to_pascal_case("a_b"), "AB");
+    }
+
+    #[test]
+    fn test_multiple_eval_codegen() {
+        let result = compile("#eval 1\n#eval 2\n#eval 3");
+        assert!(result.contains("fn main()"));
+        // All three evals should produce println! calls
+        let println_count = result.matches("println!").count();
+        assert_eq!(println_count, 3, "expected 3 println!, got: {}", result);
     }
 
     #[test]

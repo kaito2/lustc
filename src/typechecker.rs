@@ -1,3 +1,9 @@
+//! Type inference and checking pass.
+//!
+//! Uses `Ty::Unknown` as a permissive wildcard — any type is compatible with
+//! `Unknown`, allowing partial programs and unresolvable types to pass without
+//! false positives while still catching concrete mismatches.
+
 use crate::ast::*;
 use crate::error::{CompilerError, Span};
 
@@ -70,10 +76,7 @@ impl TypeChecker {
                     )),
                 ),
             ),
-            (
-                "Option.none".to_string(),
-                Ty::Option(Box::new(Ty::Unknown)),
-            ),
+            ("Option.none".to_string(), Ty::Option(Box::new(Ty::Unknown))),
             (
                 "Option.some".to_string(),
                 Ty::Arrow(
@@ -171,8 +174,7 @@ impl TypeChecker {
                     let result_ty = Ty::Named(name.clone());
                     let mut mk_ty = result_ty.clone();
                     for (_, ftype) in fields.iter().rev() {
-                        mk_ty =
-                            Ty::Arrow(Box::new(self.ast_type_to_ty(ftype)), Box::new(mk_ty));
+                        mk_ty = Ty::Arrow(Box::new(self.ast_type_to_ty(ftype)), Box::new(mk_ty));
                     }
                     top_level.push((format!("{}.mk", name), mk_ty));
                     if !prefix.is_empty() {
@@ -186,10 +188,7 @@ impl TypeChecker {
                         );
                         top_level.push((format!("{}.{}", name, fname), accessor_ty.clone()));
                         if !prefix.is_empty() {
-                            top_level.push((
-                                format!("{}.{}.{}", prefix, name, fname),
-                                accessor_ty,
-                            ));
+                            top_level.push((format!("{}.{}.{}", prefix, name, fname), accessor_ty));
                         }
                         field_sigs.push((fname.clone(), self.ast_type_to_ty(ftype)));
                     }
@@ -213,7 +212,11 @@ impl TypeChecker {
         }
     }
 
-    fn build_fun_type(&self, params: &[(std::string::String, Type)], return_type: &Option<Type>) -> Ty {
+    fn build_fun_type(
+        &self,
+        params: &[(std::string::String, Type)],
+        return_type: &Option<Type>,
+    ) -> Ty {
         let ret = return_type
             .as_ref()
             .map(|t| self.ast_type_to_ty(t))
@@ -238,9 +241,10 @@ impl TypeChecker {
                 "String" => Ty::String,
                 other => Ty::Named(other.to_string()),
             },
-            Type::Arrow(from, to) => {
-                Ty::Arrow(Box::new(self.ast_type_to_ty(from)), Box::new(self.ast_type_to_ty(to)))
-            }
+            Type::Arrow(from, to) => Ty::Arrow(
+                Box::new(self.ast_type_to_ty(from)),
+                Box::new(self.ast_type_to_ty(to)),
+            ),
             Type::App(base, arg) => {
                 if let Type::Named(name) = base.as_ref() {
                     match name.as_str() {
@@ -253,9 +257,7 @@ impl TypeChecker {
                     Ty::Unknown
                 }
             }
-            Type::Tuple(types) => {
-                Ty::Tuple(types.iter().map(|t| self.ast_type_to_ty(t)).collect())
-            }
+            Type::Tuple(types) => Ty::Tuple(types.iter().map(|t| self.ast_type_to_ty(t)).collect()),
             Type::Unit => Ty::Unit,
         }
     }
@@ -301,7 +303,8 @@ impl TypeChecker {
                 for (patterns, body) in cases {
                     self.push_scope();
                     for (i, pat) in patterns.iter().enumerate() {
-                        let expected_pat_ty = match_param_types.get(i).cloned().unwrap_or(Ty::Unknown);
+                        let expected_pat_ty =
+                            match_param_types.get(i).cloned().unwrap_or(Ty::Unknown);
                         self.define_pattern_types(pat, &expected_pat_ty);
                     }
                     let body_ty = self.infer_expr(body);
@@ -393,7 +396,11 @@ impl TypeChecker {
                 then_ty
             }
             Expr::Let {
-                name, ty, value, body, ..
+                name,
+                ty,
+                value,
+                body,
+                ..
             } => {
                 let value_ty = self.infer_expr(value);
                 let declared_ty = if let Some(t) = ty {
@@ -552,7 +559,10 @@ impl TypeChecker {
             }
             (Ty::Tuple(a_tys), Ty::Tuple(b_tys)) => {
                 a_tys.len() == b_tys.len()
-                    && a_tys.iter().zip(b_tys.iter()).all(|(a, b)| self.types_match(a, b))
+                    && a_tys
+                        .iter()
+                        .zip(b_tys.iter())
+                        .all(|(a, b)| self.types_match(a, b))
             }
             (Ty::List(a), Ty::List(b)) => self.types_match(a, b),
             (Ty::Option(a), Ty::Option(b)) => self.types_match(a, b),
@@ -647,7 +657,9 @@ mod tests {
         let result = typecheck("def f (x : Nat) : Nat := if x == 0 then 1 else true");
         assert!(result.is_err());
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, CompilerError::TypeError { msg, .. } if msg.contains("type mismatch"))));
+        assert!(errors.iter().any(
+            |e| matches!(e, CompilerError::TypeError { msg, .. } if msg.contains("type mismatch"))
+        ));
     }
 
     #[test]
@@ -655,7 +667,9 @@ mod tests {
         let result = typecheck("def f (x : Bool) : Nat := x + 1");
         assert!(result.is_err());
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, CompilerError::TypeError { msg, .. } if msg.contains("numeric"))));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, CompilerError::TypeError { msg, .. } if msg.contains("numeric"))));
     }
 
     #[test]
@@ -676,9 +690,12 @@ mod tests {
 
     #[test]
     fn test_string_interpolation_returns_string() {
-        assert!(typecheck(r#"def main : IO Unit := do
+        assert!(typecheck(
+            r#"def main : IO Unit := do
   let name := "world"
-  IO.println s!"Hello, {name}!""#).is_ok());
+  IO.println s!"Hello, {name}!""#
+        )
+        .is_ok());
     }
 
     #[test]
@@ -688,7 +705,8 @@ mod tests {
 
     #[test]
     fn test_match_arms_type_consistency() {
-        let result = typecheck(r#"inductive Color where
+        let result = typecheck(
+            r#"inductive Color where
   | red
   | green
   | blue
@@ -697,7 +715,8 @@ def f (c : Color) : Nat :=
   match c with
   | Color.red => 1
   | Color.green => "hello"
-  | Color.blue => 3"#);
+  | Color.blue => 3"#,
+        );
         assert!(result.is_err());
     }
 
@@ -706,28 +725,39 @@ def f (c : Color) : Nat :=
         let result = typecheck("def f (x : Nat) : String := x + 1");
         assert!(result.is_err());
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, CompilerError::TypeError { msg, .. } if msg.contains("type mismatch"))));
+        assert!(errors.iter().any(
+            |e| matches!(e, CompilerError::TypeError { msg, .. } if msg.contains("type mismatch"))
+        ));
     }
 
     #[test]
     fn test_recursive_function() {
-        assert!(typecheck("def factorial (n : Nat) : Nat := if n == 0 then 1 else n * factorial (n - 1)").is_ok());
+        assert!(typecheck(
+            "def factorial (n : Nat) : Nat := if n == 0 then 1 else n * factorial (n - 1)"
+        )
+        .is_ok());
     }
 
     #[test]
     fn test_struct_type_check() {
-        assert!(typecheck(r#"structure Point where
+        assert!(typecheck(
+            r#"structure Point where
   x : Nat
   y : Nat
 
-def origin : Point := Point.mk 0 0"#).is_ok());
+def origin : Point := Point.mk 0 0"#
+        )
+        .is_ok());
     }
 
     #[test]
     fn test_option_type_check() {
-        assert!(typecheck(r#"def showOpt (o : Option Nat) : String :=
+        assert!(typecheck(
+            r#"def showOpt (o : Option Nat) : String :=
   match o with
   | Option.none => "nothing"
-  | Option.some x => s!"got {x}""#).is_ok());
+  | Option.some x => s!"got {x}""#
+        )
+        .is_ok());
     }
 }

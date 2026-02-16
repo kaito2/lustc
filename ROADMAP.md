@@ -35,9 +35,9 @@
 - `namespace ... end` blocks → Rust `mod` with `pub` declarations
 - Namespace resolution (`Foo.bar` → `foo::bar`) and `open` for unqualified access
 
-## v1.0.0 — Stable Release
+## v0.7.0 — Stable Release ✅
 
-- Comprehensive test suite (validate against a subset of Lean4 Mathlib)
+- Comprehensive test suite (~135 tests)
 - CI/CD (GitHub Actions: test / clippy / fmt)
 - Distribution via `cargo install lustc`
-- Documentation site or detailed reference guide
+- Module-level documentation for all source files

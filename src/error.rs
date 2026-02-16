@@ -1,3 +1,8 @@
+//! Compiler error types and rustc-style diagnostic rendering.
+//!
+//! `Diagnostic` formats errors with source location, the offending source line,
+//! and caret underlines pointing at the error span.
+
 use std::fmt;
 
 #[derive(Debug, Clone)]

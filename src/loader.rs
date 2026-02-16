@@ -1,3 +1,8 @@
+//! Multi-file module loader with import resolution.
+//!
+//! Resolves `import Foo.Bar` to `Foo/Bar.lean` relative to the entry file,
+//! wraps loaded declarations in `Decl::Namespace`, and detects circular imports.
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -66,10 +71,7 @@ impl ModuleLoader {
         // Check for circular imports
         if self.loading.contains(&canonical) {
             return Err(CompilerError::ModuleError {
-                msg: format!(
-                    "circular import detected: {}",
-                    path.segments.join(".")
-                ),
+                msg: format!("circular import detected: {}", path.segments.join(".")),
             });
         }
 
@@ -82,15 +84,14 @@ impl ModuleLoader {
         self.loading.insert(canonical.clone());
 
         // Read and parse the module file
-        let source = std::fs::read_to_string(&file_path).map_err(|_| {
-            CompilerError::ModuleError {
+        let source =
+            std::fs::read_to_string(&file_path).map_err(|_| CompilerError::ModuleError {
                 msg: format!(
                     "module `{}` not found (looked for {})",
                     path.segments.join("."),
                     file_path.display()
                 ),
-            }
-        })?;
+            })?;
         let filename = file_path.display().to_string();
         self.file_sources.push((filename, source.clone()));
 

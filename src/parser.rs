@@ -1,3 +1,8 @@
+//! Recursive-descent parser producing `Vec<Decl>`.
+//!
+//! Supports error recovery: on a parse error the parser synchronizes to the next
+//! declaration boundary and continues, collecting all errors for batch reporting.
+
 use crate::ast::*;
 use crate::error::{CompilerError, LustcResult, Span};
 use crate::token::{Token, TokenKind};
@@ -360,10 +365,7 @@ impl Parser {
         let mut fields = Vec::new();
         loop {
             self.skip_newlines_only();
-            if self.is_at_end()
-                || self.check(&TokenKind::Dedent)
-                || self.is_decl_start()
-            {
+            if self.is_at_end() || self.check(&TokenKind::Dedent) || self.is_decl_start() {
                 break;
             }
             let field_name = self.parse_ident()?;
@@ -426,10 +428,7 @@ impl Parser {
         let end_name = self.parse_ident()?;
         if end_name != name {
             return Err(CompilerError::ParseError {
-                msg: format!(
-                    "expected `end {}`, found `end {}`",
-                    name, end_name
-                ),
+                msg: format!("expected `end {}`, found `end {}`", name, end_name),
                 span: end_span,
             });
         }
@@ -777,15 +776,20 @@ impl Parser {
 
                 // Parse the expression inside braces using a sub-lexer+parser
                 let mut sub_lexer = crate::lexer::Lexer::new(&expr_str);
-                let sub_tokens = sub_lexer.tokenize().map_err(|e| CompilerError::ParseError {
-                    msg: format!("error in interpolated expression: {}", e),
-                    span: self.peek_span(),
-                })?;
+                let sub_tokens = sub_lexer
+                    .tokenize()
+                    .map_err(|e| CompilerError::ParseError {
+                        msg: format!("error in interpolated expression: {}", e),
+                        span: self.peek_span(),
+                    })?;
                 let mut sub_parser = Parser::new(sub_tokens);
-                let expr = sub_parser.parse_single_expr().map_err(|e| CompilerError::ParseError {
-                    msg: format!("error in interpolated expression: {}", e),
-                    span: self.peek_span(),
-                })?;
+                let expr =
+                    sub_parser
+                        .parse_single_expr()
+                        .map_err(|e| CompilerError::ParseError {
+                            msg: format!("error in interpolated expression: {}", e),
+                            span: self.peek_span(),
+                        })?;
                 parts.push(StringInterpPart::Expr(expr));
             } else {
                 literal.push(chars[i]);
@@ -897,10 +901,7 @@ impl Parser {
         let mut stmts = Vec::new();
         loop {
             self.skip_newlines_only();
-            if self.is_at_end()
-                || self.check(&TokenKind::Dedent)
-                || self.is_decl_start()
-            {
+            if self.is_at_end() || self.check(&TokenKind::Dedent) || self.is_decl_start() {
                 break;
             }
 
@@ -1139,8 +1140,7 @@ fn is_keyword(s: &str) -> bool {
 fn is_expr_keyword(s: &str) -> bool {
     matches!(
         s,
-        "if" | "then" | "else" | "match" | "with" | "do" | "let" | "in" | "fun" | "where"
-            | "end"
+        "if" | "then" | "else" | "match" | "with" | "do" | "let" | "in" | "fun" | "where" | "end"
     )
 }
 

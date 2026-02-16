@@ -422,8 +422,7 @@ fn test_type_error_arithmetic_on_bool() {
 
 #[test]
 fn test_type_error_if_branch_mismatch() {
-    let stderr =
-        compile_lean_fail("def f (x : Nat) : Nat := if x == 0 then 1 else true\n");
+    let stderr = compile_lean_fail("def f (x : Nat) : Nat := if x == 0 then 1 else true\n");
     assert!(
         stderr.contains("type error"),
         "expected type error, got: {}",
@@ -832,10 +831,7 @@ fn test_circular_import_error() {
 
 #[test]
 fn test_missing_import_error() {
-    let stderr = compile_files_fail(&[(
-        "main.lean",
-        "import NonExistent\n#eval 1\n",
-    )]);
+    let stderr = compile_files_fail(&[("main.lean", "import NonExistent\n#eval 1\n")]);
     assert!(
         stderr.contains("not found"),
         "expected module not found error, got: {}",
@@ -878,4 +874,174 @@ def main : IO Unit := do
         ),
     ]);
     assert_eq!(output.trim(), "42");
+}
+
+// --- v0.7.0: Comprehensive tests ---
+
+#[test]
+fn test_empty_file() {
+    let rust = compile_lean("");
+    // Empty file should produce empty or minimal Rust output
+    assert!(
+        rust.trim().is_empty() || !rust.contains("fn main"),
+        "empty file should produce no main, got: {}",
+        rust
+    );
+}
+
+#[test]
+fn test_comments_only_file() {
+    let rust = compile_lean("-- This is a comment\n-- Another comment\n");
+    assert!(
+        rust.trim().is_empty() || !rust.contains("fn main"),
+        "comments-only file should produce no main, got: {}",
+        rust
+    );
+}
+
+#[test]
+fn test_multiple_eval() {
+    let output = compile_and_run("#eval 10\n#eval 20\n#eval 30\n");
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0], "10");
+    assert_eq!(lines[1], "20");
+    assert_eq!(lines[2], "30");
+}
+
+#[test]
+fn test_deeply_nested_expression() {
+    let output = compile_and_run("#eval ((((1 + 2) * 3) + 4) * 5)\n");
+    // ((1+2)*3+4)*5 = (3*3+4)*5 = (9+4)*5 = 13*5 = 65
+    assert_eq!(output.trim(), "65");
+}
+
+#[test]
+fn test_nested_if_else() {
+    let output = compile_and_run(
+        r#"def classify (n : Nat) : String :=
+  if n == 0 then "zero"
+  else if n == 1 then "one"
+  else if n == 2 then "two"
+  else "many"
+
+def main : IO Unit := do
+  IO.println (classify 0)
+  IO.println (classify 1)
+  IO.println (classify 2)
+  IO.println (classify 99)
+"#,
+    );
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "zero");
+    assert_eq!(lines[1], "one");
+    assert_eq!(lines[2], "two");
+    assert_eq!(lines[3], "many");
+}
+
+#[test]
+fn test_list_cons_construction() {
+    let rust = compile_lean(
+        r#"def myList : List Nat := List.cons 1 (List.cons 2 List.nil)
+"#,
+    );
+    assert!(
+        rust.contains("vec![]"),
+        "expected vec![] for List.nil, got: {}",
+        rust
+    );
+    assert!(
+        rust.contains("insert(0,"),
+        "expected insert for List.cons, got: {}",
+        rust
+    );
+}
+
+#[test]
+fn test_import_then_open() {
+    let output = compile_and_run_files(&[
+        (
+            "MathLib.lean",
+            r#"def add (x : Nat) (y : Nat) : Nat := x + y
+"#,
+        ),
+        (
+            "main.lean",
+            r#"import MathLib
+open MathLib
+
+def main : IO Unit := do
+  IO.println (toString (add 10 20))
+"#,
+        ),
+    ]);
+    assert_eq!(output.trim(), "30");
+}
+
+#[test]
+fn test_bool_literals_and_logic() {
+    let output = compile_and_run(
+        r#"def main : IO Unit := do
+  IO.println (toString (true && false))
+  IO.println (toString (true || false))
+  IO.println (toString (!true))
+"#,
+    );
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "false");
+    assert_eq!(lines[1], "true");
+    assert_eq!(lines[2], "false");
+}
+
+#[test]
+fn test_tuple_pattern_match() {
+    let output = compile_and_run(
+        r#"def swap (p : Nat × Nat) : Nat × Nat :=
+  match p with
+  | (a, b) => (b, a)
+
+def main : IO Unit := do
+  let r := swap (1, 2)
+  IO.println (toString r.1)
+  IO.println (toString r.2)
+"#,
+    );
+    let lines: Vec<&str> = output.trim().lines().collect();
+    assert_eq!(lines[0], "2");
+    assert_eq!(lines[1], "1");
+}
+
+#[test]
+fn test_unterminated_string_error() {
+    let stderr = compile_lean_fail("#eval \"hello\n");
+    assert!(
+        stderr.contains("unterminated string"),
+        "expected unterminated string error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_unexpected_token_error() {
+    let stderr = compile_lean_fail("def + 42\n");
+    assert!(
+        stderr.contains("error"),
+        "expected error for unexpected token, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_namespace_end_mismatch_error() {
+    let stderr = compile_lean_fail(
+        r#"namespace Foo
+def x : Nat := 1
+end Bar
+"#,
+    );
+    assert!(
+        stderr.contains("end Foo") || stderr.contains("end Bar"),
+        "expected namespace end mismatch error, got: {}",
+        stderr
+    );
 }

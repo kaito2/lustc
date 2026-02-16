@@ -1,3 +1,8 @@
+//! Token types for the Lean4 subset lexer.
+//!
+//! Includes layout tokens (`Indent`/`Dedent`) produced by the indentation-sensitive
+//! lexer to represent block structure without braces.
+
 use crate::error::Span;
 
 #[derive(Debug, Clone, PartialEq)]

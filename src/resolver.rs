@@ -1,3 +1,8 @@
+//! Name resolution pass using a scope stack.
+//!
+//! Validates that all referenced variables are defined. Handles `open` by copying
+//! qualified namespace members into the current scope as unqualified names.
+
 use crate::ast::*;
 use crate::error::CompilerError;
 
@@ -128,9 +133,7 @@ impl Resolver {
 
     fn resolve_decl(&mut self, decl: &Decl) {
         match decl {
-            Decl::FunDef {
-                params, body, ..
-            } => {
+            Decl::FunDef { params, body, .. } => {
                 self.push_scope();
                 for (name, _) in params {
                     self.define(name.clone());
@@ -138,9 +141,7 @@ impl Resolver {
                 self.resolve_expr(body);
                 self.pop_scope();
             }
-            Decl::FunDefMatch {
-                params, cases, ..
-            } => {
+            Decl::FunDefMatch { params, cases, .. } => {
                 self.push_scope();
                 for (name, _) in params {
                     self.define(name.clone());
@@ -383,15 +384,21 @@ def f (c : Color) : Nat :=
 
     #[test]
     fn test_builtins() {
-        assert!(resolve(r#"def main : IO Unit := do
-  IO.println (toString 42)"#).is_ok());
+        assert!(resolve(
+            r#"def main : IO Unit := do
+  IO.println (toString 42)"#
+        )
+        .is_ok());
     }
 
     #[test]
     fn test_do_let_scope() {
-        assert!(resolve(r#"def main : IO Unit := do
+        assert!(resolve(
+            r#"def main : IO Unit := do
   let x := 10
-  IO.println (toString x)"#).is_ok());
+  IO.println (toString x)"#
+        )
+        .is_ok());
     }
 
     #[test]

@@ -1,3 +1,9 @@
+//! Indentation-sensitive lexer for the Lean4 subset.
+//!
+//! Tracks an indent stack to emit synthetic `Indent`/`Dedent` tokens.
+//! Supports nested block comments (`/- ... -/`), Unicode operators (`→`, `←`, `×`),
+//! and string interpolation (`s!"...{expr}..."`).
+
 use crate::error::{CompilerError, LustcResult, Span};
 use crate::token::{Token, TokenKind};
 
@@ -755,6 +761,39 @@ mod tests {
         // Should have: Do, Newline, Indent, x, Newline, y, Newline, Dedent, z, Eof
         assert!(kinds.contains(&TokenKind::Indent));
         assert!(kinds.contains(&TokenKind::Dedent));
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let kinds = token_kinds("");
+        assert_eq!(kinds, vec![TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_nested_block_comment() {
+        let kinds = filter_significant(token_kinds("a /- outer /- inner -/ still outer -/ b"));
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Ident("a".to_string()),
+                TokenKind::Ident("b".to_string()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_unicode_times_operator() {
+        let kinds = filter_significant(token_kinds("Nat × Nat"));
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Ident("Nat".to_string()),
+                TokenKind::Times,
+                TokenKind::Ident("Nat".to_string()),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
