@@ -93,6 +93,27 @@ impl TypeChecker {
     pub fn check(mut self, decls: &[Decl]) -> Result<(), Vec<CompilerError>> {
         // First pass: collect all type definitions and function signatures
         let mut top_level = Vec::new();
+        self.collect_signatures(decls, "", &mut top_level);
+        self.scopes.push(top_level);
+
+        // Second pass: type-check all declarations
+        for decl in decls {
+            self.check_decl(decl);
+        }
+
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(self.errors)
+        }
+    }
+
+    fn collect_signatures(
+        &mut self,
+        decls: &[Decl],
+        prefix: &str,
+        top_level: &mut Vec<(std::string::String, Ty)>,
+    ) {
         for decl in decls {
             match decl {
                 Decl::FunDef {
@@ -102,7 +123,10 @@ impl TypeChecker {
                     ..
                 } => {
                     let ty = self.build_fun_type(params, return_type);
-                    top_level.push((name.clone(), ty));
+                    top_level.push((name.clone(), ty.clone()));
+                    if !prefix.is_empty() {
+                        top_level.push((format!("{}.{}", prefix, name), ty));
+                    }
                 }
                 Decl::FunDefMatch {
                     name,
@@ -111,7 +135,10 @@ impl TypeChecker {
                     ..
                 } => {
                     let ty = self.build_fun_type(params, return_type);
-                    top_level.push((name.clone(), ty));
+                    top_level.push((name.clone(), ty.clone()));
+                    if !prefix.is_empty() {
+                        top_level.push((format!("{}.{}", prefix, name), ty));
+                    }
                 }
                 Decl::InductiveDef { name, constructors } => {
                     let result_ty = Ty::Named(name.clone());
@@ -128,7 +155,13 @@ impl TypeChecker {
                         };
                         let qualified = format!("{}.{}", name, ctor.name);
                         top_level.push((ctor.name.clone(), ctor_ty.clone()));
-                        top_level.push((qualified.clone(), ctor_ty.clone()));
+                        top_level.push((qualified, ctor_ty.clone()));
+                        if !prefix.is_empty() {
+                            top_level.push((
+                                format!("{}.{}.{}", prefix, name, ctor.name),
+                                ctor_ty.clone(),
+                            ));
+                        }
                         ctor_sigs.push((ctor.name.clone(), ctor_ty));
                     }
                     top_level.push((name.clone(), result_ty));
@@ -136,15 +169,15 @@ impl TypeChecker {
                 }
                 Decl::StructDef { name, fields } => {
                     let result_ty = Ty::Named(name.clone());
-                    // Register Name.mk constructor
                     let mut mk_ty = result_ty.clone();
                     for (_, ftype) in fields.iter().rev() {
                         mk_ty =
                             Ty::Arrow(Box::new(self.ast_type_to_ty(ftype)), Box::new(mk_ty));
                     }
                     top_level.push((format!("{}.mk", name), mk_ty));
-
-                    // Register Name.field accessors
+                    if !prefix.is_empty() {
+                        // Not strictly needed but keeps consistency
+                    }
                     let mut field_sigs = Vec::new();
                     for (fname, ftype) in fields {
                         let accessor_ty = Ty::Arrow(
@@ -152,25 +185,31 @@ impl TypeChecker {
                             Box::new(self.ast_type_to_ty(ftype)),
                         );
                         top_level.push((format!("{}.{}", name, fname), accessor_ty.clone()));
+                        if !prefix.is_empty() {
+                            top_level.push((
+                                format!("{}.{}.{}", prefix, name, fname),
+                                accessor_ty,
+                            ));
+                        }
                         field_sigs.push((fname.clone(), self.ast_type_to_ty(ftype)));
                     }
                     top_level.push((name.clone(), result_ty));
                     self.struct_defs.push((name.clone(), field_sigs));
                 }
-                Decl::Eval(_) => {}
+                Decl::Namespace { name, decls: inner } => {
+                    let new_prefix = if prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}.{}", prefix, name)
+                    };
+                    // Register inner names qualified with just this namespace name
+                    self.collect_signatures(inner, name, top_level);
+                    if !prefix.is_empty() {
+                        self.collect_signatures(inner, &new_prefix, top_level);
+                    }
+                }
+                Decl::Import { .. } | Decl::Open { .. } | Decl::Eval(_) => {}
             }
-        }
-        self.scopes.push(top_level);
-
-        // Second pass: type-check all declarations
-        for decl in decls {
-            self.check_decl(decl);
-        }
-
-        if self.errors.is_empty() {
-            Ok(())
-        } else {
-            Err(self.errors)
         }
     }
 
@@ -274,6 +313,12 @@ impl TypeChecker {
             Decl::InductiveDef { .. } | Decl::StructDef { .. } => {}
             Decl::Eval(expr) => {
                 self.infer_expr(expr);
+            }
+            Decl::Import { .. } | Decl::Open { .. } => {}
+            Decl::Namespace { decls, .. } => {
+                for d in decls {
+                    self.check_decl(d);
+                }
             }
         }
     }

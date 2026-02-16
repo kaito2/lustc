@@ -16,6 +16,10 @@ pub enum TokenKind {
     Inductive,
     Fun,
     Structure,
+    Import,
+    Open,
+    Namespace,
+    End,
 
     // Literals
     IntLit(u64),

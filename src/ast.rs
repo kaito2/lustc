@@ -1,4 +1,16 @@
 #[derive(Debug, Clone)]
+pub struct ModulePath {
+    pub segments: Vec<String>,
+}
+
+impl ModulePath {
+    pub fn to_file_path(&self) -> String {
+        format!("{}.lean", self.segments.join("/"))
+    }
+
+}
+
+#[derive(Debug, Clone)]
 pub enum Decl {
     FunDef {
         name: String,
@@ -21,6 +33,16 @@ pub enum Decl {
         fields: Vec<(String, Type)>,
     },
     Eval(Expr),
+    Import {
+        path: ModulePath,
+    },
+    Open {
+        path: ModulePath,
+    },
+    Namespace {
+        name: String,
+        decls: Vec<Decl>,
+    },
 }
 
 #[derive(Debug, Clone)]

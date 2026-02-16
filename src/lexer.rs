@@ -387,6 +387,10 @@ impl Lexer {
             "inductive" => TokenKind::Inductive,
             "fun" => TokenKind::Fun,
             "structure" => TokenKind::Structure,
+            "import" => TokenKind::Import,
+            "open" => TokenKind::Open,
+            "namespace" => TokenKind::Namespace,
+            "end" => TokenKind::End,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             _ => TokenKind::Ident(name),
@@ -756,7 +760,7 @@ mod tests {
     #[test]
     fn test_keywords() {
         let kinds = filter_significant(token_kinds(
-            "def let in if then else match with do where inductive fun true false",
+            "def let in if then else match with do where inductive fun true false import open namespace end",
         ));
         assert_eq!(
             kinds,
@@ -775,6 +779,10 @@ mod tests {
                 TokenKind::Fun,
                 TokenKind::True,
                 TokenKind::False,
+                TokenKind::Import,
+                TokenKind::Open,
+                TokenKind::Namespace,
+                TokenKind::End,
                 TokenKind::Eof,
             ]
         );

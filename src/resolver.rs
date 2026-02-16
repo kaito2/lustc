@@ -26,32 +26,11 @@ impl Resolver {
     pub fn resolve(mut self, decls: &[Decl]) -> Result<(), Vec<CompilerError>> {
         // First pass: collect all top-level names
         let mut top_level = Vec::new();
-        for decl in decls {
-            match decl {
-                Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } => {
-                    top_level.push(name.clone());
-                }
-                Decl::InductiveDef { name, constructors } => {
-                    top_level.push(name.clone());
-                    for ctor in constructors {
-                        // Register both unqualified and qualified constructor names
-                        top_level.push(ctor.name.clone());
-                        top_level.push(format!("{}.{}", name, ctor.name));
-                    }
-                }
-                Decl::StructDef { name, fields } => {
-                    top_level.push(name.clone());
-                    // Register Name.mk constructor
-                    top_level.push(format!("{}.mk", name));
-                    // Register Name.field accessors
-                    for (fname, _) in fields {
-                        top_level.push(format!("{}.{}", name, fname));
-                    }
-                }
-                Decl::Eval(_) => {}
-            }
-        }
+        self.collect_names(decls, "", &mut top_level);
         self.scopes.push(top_level);
+
+        // Process open declarations: add unqualified aliases for opened namespace members
+        self.process_opens(decls);
 
         // Second pass: resolve names in all declarations
         for decl in decls {
@@ -62,6 +41,88 @@ impl Resolver {
             Ok(())
         } else {
             Err(self.errors)
+        }
+    }
+
+    fn collect_names(&self, decls: &[Decl], prefix: &str, names: &mut Vec<String>) {
+        for decl in decls {
+            match decl {
+                Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } => {
+                    names.push(name.clone());
+                    if !prefix.is_empty() {
+                        names.push(format!("{}.{}", prefix, name));
+                    }
+                }
+                Decl::InductiveDef { name, constructors } => {
+                    names.push(name.clone());
+                    if !prefix.is_empty() {
+                        names.push(format!("{}.{}", prefix, name));
+                    }
+                    for ctor in constructors {
+                        names.push(ctor.name.clone());
+                        names.push(format!("{}.{}", name, ctor.name));
+                        if !prefix.is_empty() {
+                            names.push(format!("{}.{}.{}", prefix, name, ctor.name));
+                        }
+                    }
+                }
+                Decl::StructDef { name, fields } => {
+                    names.push(name.clone());
+                    if !prefix.is_empty() {
+                        names.push(format!("{}.{}", prefix, name));
+                    }
+                    names.push(format!("{}.mk", name));
+                    if !prefix.is_empty() {
+                        names.push(format!("{}.{}.mk", prefix, name));
+                    }
+                    for (fname, _) in fields {
+                        names.push(format!("{}.{}", name, fname));
+                        if !prefix.is_empty() {
+                            names.push(format!("{}.{}.{}", prefix, name, fname));
+                        }
+                    }
+                }
+                Decl::Namespace { name, decls: inner } => {
+                    names.push(name.clone());
+                    if !prefix.is_empty() {
+                        names.push(format!("{}.{}", prefix, name));
+                    }
+                    let new_prefix = if prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}.{}", prefix, name)
+                    };
+                    // Also register inner names qualified with just this namespace name
+                    // e.g., import Utils.Math → Math.add should work
+                    self.collect_names(inner, name, names);
+                    if !prefix.is_empty() {
+                        self.collect_names(inner, &new_prefix, names);
+                    }
+                }
+                Decl::Import { .. } | Decl::Open { .. } | Decl::Eval(_) => {}
+            }
+        }
+    }
+
+    fn process_opens(&mut self, decls: &[Decl]) {
+        for decl in decls {
+            if let Decl::Open { path } = decl {
+                let ns_prefix = path.segments.join(".");
+                // Find all qualified names with this prefix and add unqualified versions
+                let scope = self.scopes.last().cloned().unwrap_or_default();
+                let mut to_add = Vec::new();
+                let prefix_dot = format!("{}.", ns_prefix);
+                for name in &scope {
+                    if let Some(rest) = name.strip_prefix(&prefix_dot) {
+                        if !rest.contains('.') {
+                            to_add.push(rest.to_string());
+                        }
+                    }
+                }
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.extend(to_add);
+                }
+            }
         }
     }
 
@@ -98,6 +159,12 @@ impl Resolver {
             Decl::StructDef { .. } => {}
             Decl::Eval(expr) => {
                 self.resolve_expr(expr);
+            }
+            Decl::Import { .. } | Decl::Open { .. } => {}
+            Decl::Namespace { decls, .. } => {
+                for d in decls {
+                    self.resolve_decl(d);
+                }
             }
         }
     }

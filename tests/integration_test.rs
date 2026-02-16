@@ -577,6 +577,122 @@ def main : IO Unit := do
     );
 }
 
+// --- Multi-file helpers ---
+
+fn compile_and_run_files(files: &[(&str, &str)]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Write all files
+    for (name, content) in files {
+        let file_path = dir.path().join(name);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&file_path, content).unwrap();
+    }
+
+    // The last file is the entry point
+    let (entry_name, _) = files.last().unwrap();
+    let lean_path = dir.path().join(entry_name);
+    let rs_path = dir.path().join("output.rs");
+    let bin_path = dir.path().join("test_bin");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_lustc"))
+        .arg(lean_path.to_str().unwrap())
+        .arg("-o")
+        .arg(rs_path.to_str().unwrap())
+        .output()
+        .expect("failed to run lustc");
+
+    assert!(
+        output.status.success(),
+        "lustc failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new("rustc")
+        .arg(rs_path.to_str().unwrap())
+        .arg("-o")
+        .arg(bin_path.to_str().unwrap())
+        .output()
+        .expect("failed to run rustc");
+
+    assert!(
+        output.status.success(),
+        "rustc failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(bin_path.to_str().unwrap())
+        .output()
+        .expect("failed to run binary");
+
+    assert!(output.status.success(), "binary failed");
+
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn compile_files(files: &[(&str, &str)]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+
+    for (name, content) in files {
+        let file_path = dir.path().join(name);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&file_path, content).unwrap();
+    }
+
+    let (entry_name, _) = files.last().unwrap();
+    let lean_path = dir.path().join(entry_name);
+    let rs_path = dir.path().join("output.rs");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_lustc"))
+        .arg(lean_path.to_str().unwrap())
+        .arg("-o")
+        .arg(rs_path.to_str().unwrap())
+        .output()
+        .expect("failed to run lustc");
+
+    assert!(
+        output.status.success(),
+        "lustc failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::read_to_string(&rs_path).unwrap()
+}
+
+fn compile_files_fail(files: &[(&str, &str)]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+
+    for (name, content) in files {
+        let file_path = dir.path().join(name);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&file_path, content).unwrap();
+    }
+
+    let (entry_name, _) = files.last().unwrap();
+    let lean_path = dir.path().join(entry_name);
+    let rs_path = dir.path().join("output.rs");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_lustc"))
+        .arg(lean_path.to_str().unwrap())
+        .arg("-o")
+        .arg(rs_path.to_str().unwrap())
+        .output()
+        .expect("failed to run lustc");
+
+    assert!(
+        !output.status.success(),
+        "lustc should have failed but succeeded"
+    );
+
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
 // --- v0.3.0: Cross-feature integration ---
 
 #[test]
@@ -597,4 +713,169 @@ def main : IO Unit := do
 "#,
     );
     assert_eq!(output.trim(), "(3, 7)");
+}
+
+// --- v0.6.0: Module System ---
+
+#[test]
+fn test_basic_import() {
+    let output = compile_and_run_files(&[
+        (
+            "Helpers.lean",
+            r#"def answer : Nat := 42
+"#,
+        ),
+        (
+            "main.lean",
+            r#"import Helpers
+
+def main : IO Unit := do
+  IO.println (toString (Helpers.answer))
+"#,
+        ),
+    ]);
+    assert_eq!(output.trim(), "42");
+}
+
+#[test]
+fn test_nested_import() {
+    let output = compile_and_run_files(&[
+        (
+            "Utils/Math.lean",
+            r#"def add (x : Nat) (y : Nat) : Nat := x + y
+"#,
+        ),
+        (
+            "main.lean",
+            r#"import Utils.Math
+
+def main : IO Unit := do
+  IO.println (toString (Math.add 3 4))
+"#,
+        ),
+    ]);
+    assert_eq!(output.trim(), "7");
+}
+
+#[test]
+fn test_namespace() {
+    let output = compile_and_run(
+        r#"namespace Math
+def square (x : Nat) : Nat := x * x
+end Math
+
+def main : IO Unit := do
+  IO.println (toString (Math.square 5))
+"#,
+    );
+    assert_eq!(output.trim(), "25");
+}
+
+#[test]
+fn test_namespace_with_open() {
+    let output = compile_and_run(
+        r#"namespace Math
+def square (x : Nat) : Nat := x * x
+end Math
+
+open Math
+
+def main : IO Unit := do
+  IO.println (toString (square 5))
+"#,
+    );
+    assert_eq!(output.trim(), "25");
+}
+
+#[test]
+fn test_import_generated_code() {
+    let rust = compile_files(&[
+        (
+            "Helpers.lean",
+            r#"def greet : Nat := 99
+"#,
+        ),
+        (
+            "main.lean",
+            r#"import Helpers
+
+def main : IO Unit := do
+  IO.println (toString (Helpers.greet))
+"#,
+        ),
+    ]);
+    assert!(
+        rust.contains("mod helpers"),
+        "expected mod block, got: {}",
+        rust
+    );
+    assert!(
+        rust.contains("pub fn"),
+        "expected pub fn in mod, got: {}",
+        rust
+    );
+}
+
+#[test]
+fn test_circular_import_error() {
+    let stderr = compile_files_fail(&[
+        ("A.lean", "import B\n"),
+        ("B.lean", "import A\n"),
+        ("main.lean", "import A\n#eval 1\n"),
+    ]);
+    assert!(
+        stderr.contains("circular import"),
+        "expected circular import error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_missing_import_error() {
+    let stderr = compile_files_fail(&[(
+        "main.lean",
+        "import NonExistent\n#eval 1\n",
+    )]);
+    assert!(
+        stderr.contains("not found"),
+        "expected module not found error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_namespace_inductive_type() {
+    let output = compile_and_run(
+        r#"namespace Shapes
+inductive Color where
+  | red
+  | green
+  | blue
+end Shapes
+
+def main : IO Unit := do
+  IO.println "ok"
+"#,
+    );
+    assert_eq!(output.trim(), "ok");
+}
+
+#[test]
+fn test_cross_feature_import_namespace_struct() {
+    let output = compile_and_run_files(&[
+        (
+            "Geometry.lean",
+            r#"def double (x : Nat) : Nat := x * 2
+"#,
+        ),
+        (
+            "main.lean",
+            r#"import Geometry
+
+def main : IO Unit := do
+  IO.println (toString (Geometry.double 21))
+"#,
+        ),
+    ]);
+    assert_eq!(output.trim(), "42");
 }

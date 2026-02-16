@@ -57,6 +57,10 @@ impl Parser {
                 | TokenKind::Inductive
                 | TokenKind::Structure
                 | TokenKind::HashEval
+                | TokenKind::Import
+                | TokenKind::Open
+                | TokenKind::Namespace
+                | TokenKind::End
         )
     }
 
@@ -120,6 +124,9 @@ impl Parser {
             TokenKind::Inductive => self.parse_inductive(),
             TokenKind::Structure => self.parse_structure(),
             TokenKind::HashEval => self.parse_eval(),
+            TokenKind::Import => self.parse_import(),
+            TokenKind::Open => self.parse_open(),
+            TokenKind::Namespace => self.parse_namespace(),
             _ => Err(CompilerError::ParseError {
                 msg: format!("expected declaration, found {:?}", self.peek()),
                 span: self.peek_span(),
@@ -379,6 +386,64 @@ impl Parser {
         self.skip_newlines();
         let expr = self.parse_expr()?;
         Ok(Decl::Eval(expr))
+    }
+
+    fn parse_import(&mut self) -> LustcResult<Decl> {
+        self.expect(&TokenKind::Import)?;
+        let path = self.parse_module_path()?;
+        Ok(Decl::Import { path })
+    }
+
+    fn parse_open(&mut self) -> LustcResult<Decl> {
+        self.expect(&TokenKind::Open)?;
+        let path = self.parse_module_path()?;
+        Ok(Decl::Open { path })
+    }
+
+    fn parse_namespace(&mut self) -> LustcResult<Decl> {
+        self.expect(&TokenKind::Namespace)?;
+        let name = self.parse_ident()?;
+        self.skip_newlines();
+
+        let mut decls = Vec::new();
+        while !self.is_at_end() && !self.check(&TokenKind::End) {
+            self.skip_newlines();
+            if self.is_at_end() || self.check(&TokenKind::End) {
+                break;
+            }
+            match self.parse_decl() {
+                Ok(decl) => decls.push(decl),
+                Err(e) => {
+                    self.errors.push(e);
+                    self.synchronize();
+                }
+            }
+            self.skip_newlines();
+        }
+
+        let end_span = self.peek_span();
+        self.expect(&TokenKind::End)?;
+        let end_name = self.parse_ident()?;
+        if end_name != name {
+            return Err(CompilerError::ParseError {
+                msg: format!(
+                    "expected `end {}`, found `end {}`",
+                    name, end_name
+                ),
+                span: end_span,
+            });
+        }
+
+        Ok(Decl::Namespace { name, decls })
+    }
+
+    fn parse_module_path(&mut self) -> LustcResult<ModulePath> {
+        let mut segments = vec![self.parse_ident()?];
+        while self.check(&TokenKind::Dot) {
+            self.advance();
+            segments.push(self.parse_ident()?);
+        }
+        Ok(ModulePath { segments })
     }
 
     // --- Type parsers ---
@@ -1064,6 +1129,10 @@ fn is_keyword(s: &str) -> bool {
             | "structure"
             | "true"
             | "false"
+            | "import"
+            | "open"
+            | "namespace"
+            | "end"
     )
 }
 
@@ -1071,6 +1140,7 @@ fn is_expr_keyword(s: &str) -> bool {
     matches!(
         s,
         "if" | "then" | "else" | "match" | "with" | "do" | "let" | "in" | "fun" | "where"
+            | "end"
     )
 }
 
@@ -1264,5 +1334,54 @@ mod tests {
             }
             _ => panic!("expected InductiveDef"),
         }
+    }
+
+    #[test]
+    fn test_import() {
+        let decls = parse("import Foo.Bar");
+        assert_eq!(decls.len(), 1);
+        match &decls[0] {
+            Decl::Import { path } => {
+                assert_eq!(path.segments, vec!["Foo", "Bar"]);
+                assert_eq!(path.to_file_path(), "Foo/Bar.lean");
+            }
+            _ => panic!("expected Import"),
+        }
+    }
+
+    #[test]
+    fn test_open() {
+        let decls = parse("open Foo");
+        assert_eq!(decls.len(), 1);
+        match &decls[0] {
+            Decl::Open { path } => {
+                assert_eq!(path.segments, vec!["Foo"]);
+            }
+            _ => panic!("expected Open"),
+        }
+    }
+
+    #[test]
+    fn test_namespace() {
+        let decls = parse("namespace Math\ndef square (x : Nat) : Nat := x * x\nend Math");
+        assert_eq!(decls.len(), 1);
+        match &decls[0] {
+            Decl::Namespace { name, decls } => {
+                assert_eq!(name, "Math");
+                assert_eq!(decls.len(), 1);
+                assert!(matches!(&decls[0], Decl::FunDef { name, .. } if name == "square"));
+            }
+            _ => panic!("expected Namespace"),
+        }
+    }
+
+    #[test]
+    fn test_namespace_end_name_mismatch() {
+        let src = "namespace Math\ndef square (x : Nat) : Nat := x * x\nend Foo";
+        let mut lexer = Lexer::new(src);
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        let result = parser.parse_program();
+        assert!(result.is_err());
     }
 }

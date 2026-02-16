@@ -28,11 +28,12 @@
 - Remove unnecessary `#[allow(unused)]` annotations
 - Dead code detection and elimination
 
-## v0.6.0 — Module System
+## v0.6.0 — Module System ✅
 
-- `import` / `open` → Rust `mod` / `use`
-- Multi-file input support
-- Namespace resolution
+- `import` / `open` → Rust `mod` with namespace-qualified resolution
+- Multi-file input support (recursive module loading, circular import detection)
+- `namespace ... end` blocks → Rust `mod` with `pub` declarations
+- Namespace resolution (`Foo.bar` → `foo::bar`) and `open` for unqualified access
 
 ## v1.0.0 — Stable Release
 

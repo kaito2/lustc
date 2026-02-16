@@ -24,6 +24,7 @@ A Lean4 subset to Rust source-to-source compiler, written in Rust.
 - Automatic `camelCase` → `snake_case` conversion for Rust conventions
 - Dead code elimination (unused functions/types removed)
 - `rustfmt`-formatted output
+- Module system: `import`, `open`, `namespace ... end` with multi-file support
 
 ## Installation
 
@@ -123,10 +124,34 @@ def showOpt (o : Option Nat) : String :=
   | Option.some x => s!"got {x}"
 ```
 
+### Modules and Namespaces
+
+```lean
+-- Helpers.lean
+def answer : Nat := 42
+
+-- main.lean
+import Helpers
+
+def main : IO Unit := do
+  IO.println (toString Helpers.answer)
+```
+
+```lean
+namespace Math
+def square (n : Nat) : Nat := n * n
+end Math
+
+open Math
+
+def main : IO Unit := do
+  IO.println (toString (square 5))
+```
+
 ## Compiler Pipeline
 
 ```
-Lean4 source → Lexer → Tokens → Parser → AST → Resolver → TypeChecker → CodeGen → Rust source
+Lean4 source → Lexer → Tokens → Parser → AST → ModuleLoader → Resolver → TypeChecker → CodeGen → Rust source
 ```
 
 ## Running Tests

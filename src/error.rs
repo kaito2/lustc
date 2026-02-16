@@ -85,6 +85,9 @@ impl fmt::Display for Diagnostic<'_> {
             CompilerError::CodeGenError { msg } => {
                 writeln!(f, "error: {}", msg)
             }
+            CompilerError::ModuleError { msg } => {
+                writeln!(f, "module error: {}", msg)
+            }
             CompilerError::IoError(e) => {
                 writeln!(f, "error: {}", e)
             }
@@ -125,6 +128,9 @@ pub enum CompilerError {
     CodeGenError {
         msg: String,
     },
+    ModuleError {
+        msg: String,
+    },
     IoError(std::io::Error),
     Multiple(Vec<CompilerError>),
 }
@@ -146,6 +152,9 @@ impl fmt::Display for CompilerError {
             }
             CompilerError::CodeGenError { msg } => {
                 write!(f, "Code generation error: {}", msg)
+            }
+            CompilerError::ModuleError { msg } => {
+                write!(f, "Module error: {}", msg)
             }
             CompilerError::IoError(e) => write!(f, "IO error: {}", e),
             CompilerError::Multiple(errors) => {

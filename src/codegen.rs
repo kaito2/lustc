@@ -75,21 +75,30 @@ fn collect_names_pattern(pat: &Pattern, names: &mut HashSet<String>) {
     }
 }
 
-/// Compute the set of reachable declaration names starting from entry points.
-fn collect_reachable(decls: &[Decl]) -> HashSet<String> {
-    // Build a map from declaration name → referenced names
-    let mut decl_refs: HashMap<String, HashSet<String>> = HashMap::new();
-    // Track type name → all associated names (constructors, struct, etc.)
-    let mut type_associated: HashMap<String, Vec<String>> = HashMap::new();
-
+fn collect_reachable_decls(
+    decls: &[Decl],
+    prefix: &str,
+    decl_refs: &mut HashMap<String, HashSet<String>>,
+    type_associated: &mut HashMap<String, Vec<String>>,
+) {
     for decl in decls {
         match decl {
             Decl::FunDef { name, body, .. } => {
+                let qualified = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", prefix, name)
+                };
                 let mut refs = HashSet::new();
                 collect_names_expr(body, &mut refs);
-                decl_refs.insert(name.clone(), refs);
+                decl_refs.insert(qualified, refs);
             }
             Decl::FunDefMatch { name, cases, .. } => {
+                let qualified = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", prefix, name)
+                };
                 let mut refs = HashSet::new();
                 for (patterns, body) in cases {
                     for pat in patterns {
@@ -97,28 +106,85 @@ fn collect_reachable(decls: &[Decl]) -> HashSet<String> {
                     }
                     collect_names_expr(body, &mut refs);
                 }
-                decl_refs.insert(name.clone(), refs);
+                decl_refs.insert(qualified, refs);
             }
             Decl::InductiveDef { name, constructors } => {
-                let mut associated = vec![name.clone()];
+                let qualified = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", prefix, name)
+                };
+                let mut associated = vec![qualified.clone()];
                 for ctor in constructors {
                     associated.push(ctor.name.clone());
                     associated.push(format!("{}.{}", name, ctor.name));
+                    if !prefix.is_empty() {
+                        associated.push(format!("{}.{}.{}", prefix, name, ctor.name));
+                    }
                 }
-                type_associated.insert(name.clone(), associated);
-                decl_refs.insert(name.clone(), HashSet::new());
+                type_associated.insert(qualified.clone(), associated);
+                decl_refs.insert(qualified, HashSet::new());
             }
             Decl::StructDef { name, fields } => {
-                let mut associated = vec![name.clone(), format!("{}.mk", name)];
+                let qualified = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", prefix, name)
+                };
+                let mut associated = vec![qualified.clone(), format!("{}.mk", name)];
+                if !prefix.is_empty() {
+                    associated.push(format!("{}.{}.mk", prefix, name));
+                }
                 for (fname, _) in fields {
                     associated.push(format!("{}.{}", name, fname));
+                    if !prefix.is_empty() {
+                        associated.push(format!("{}.{}.{}", prefix, name, fname));
+                    }
                 }
-                type_associated.insert(name.clone(), associated);
-                decl_refs.insert(name.clone(), HashSet::new());
+                type_associated.insert(qualified.clone(), associated);
+                decl_refs.insert(qualified, HashSet::new());
             }
-            Decl::Eval(_) => {} // always reachable
+            Decl::Namespace { name, decls: inner } => {
+                // The namespace itself is reachable if any of its members are referenced
+                let qualified = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", prefix, name)
+                };
+                // Collect inner declarations with qualified prefix
+                collect_reachable_decls(inner, &qualified, decl_refs, type_associated);
+                // Make the namespace name map to all its inner decls
+                let mut associated = vec![qualified.clone()];
+                for d in inner {
+                    let inner_name = match d {
+                        Decl::FunDef { name: n, .. }
+                        | Decl::FunDefMatch { name: n, .. }
+                        | Decl::InductiveDef { name: n, .. }
+                        | Decl::StructDef { name: n, .. }
+                        | Decl::Namespace { name: n, .. } => {
+                            Some(format!("{}.{}", qualified, n))
+                        }
+                        _ => None,
+                    };
+                    if let Some(n) = inner_name {
+                        associated.push(n);
+                    }
+                }
+                type_associated.insert(qualified, associated);
+            }
+            Decl::Eval(_) | Decl::Import { .. } | Decl::Open { .. } => {}
         }
     }
+}
+
+/// Compute the set of reachable declaration names starting from entry points.
+fn collect_reachable(decls: &[Decl]) -> HashSet<String> {
+    // Build a map from declaration name → referenced names
+    let mut decl_refs: HashMap<String, HashSet<String>> = HashMap::new();
+    // Track type name → all associated names (constructors, struct, etc.)
+    let mut type_associated: HashMap<String, Vec<String>> = HashMap::new();
+
+    collect_reachable_decls(decls, "", &mut decl_refs, &mut type_associated);
 
     // Entry points: main, #eval
     let has_entry_point = decls.iter().any(|d| {
@@ -129,17 +195,24 @@ fn collect_reachable(decls: &[Decl]) -> HashSet<String> {
     // If there are no entry points, all declarations are reachable
     if !has_entry_point {
         let mut all = HashSet::new();
-        for decl in decls {
-            match decl {
-                Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } => {
-                    all.insert(name.clone());
+        fn collect_all_names(decls: &[Decl], all: &mut HashSet<String>) {
+            for decl in decls {
+                match decl {
+                    Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } => {
+                        all.insert(name.clone());
+                    }
+                    Decl::InductiveDef { name, .. } | Decl::StructDef { name, .. } => {
+                        all.insert(name.clone());
+                    }
+                    Decl::Namespace { name, decls: inner } => {
+                        all.insert(name.clone());
+                        collect_all_names(inner, all);
+                    }
+                    _ => {}
                 }
-                Decl::InductiveDef { name, .. } | Decl::StructDef { name, .. } => {
-                    all.insert(name.clone());
-                }
-                _ => {}
             }
         }
+        collect_all_names(decls, &mut all);
         return all;
     }
 
@@ -159,6 +232,31 @@ fn collect_reachable(decls: &[Decl]) -> HashSet<String> {
                     if !reachable.contains(r) {
                         reachable.insert(r.clone());
                         worklist.push(r.clone());
+                    }
+                }
+            }
+            Decl::Import { path } => {
+                // Import makes the module namespace reachable
+                if let Some(last) = path.segments.last() {
+                    if !reachable.contains(last) {
+                        reachable.insert(last.clone());
+                        worklist.push(last.clone());
+                    }
+                }
+            }
+            Decl::Open { path } => {
+                // Open makes the namespace reachable
+                let name = path.segments.join(".");
+                if !reachable.contains(&name) {
+                    reachable.insert(name.clone());
+                    worklist.push(name);
+                }
+                // Also try the single segment
+                if path.segments.len() == 1 {
+                    let single = &path.segments[0];
+                    if !reachable.contains(single) {
+                        reachable.insert(single.clone());
+                        worklist.push(single.clone());
                     }
                 }
             }
@@ -196,6 +294,10 @@ pub struct CodeGen {
     indent: usize,
     inductive_names: Vec<String>,
     struct_fields: HashMap<String, Vec<(String, Type)>>,
+    namespace_names: HashSet<String>,
+    zero_arg_fns: HashSet<String>,
+    opened_namespaces: Vec<String>,
+    namespace_members: HashMap<String, HashSet<String>>,
 }
 
 impl CodeGen {
@@ -205,6 +307,10 @@ impl CodeGen {
             indent: 0,
             inductive_names: Vec::new(),
             struct_fields: HashMap::new(),
+            namespace_names: HashSet::new(),
+            zero_arg_fns: HashSet::new(),
+            opened_namespaces: Vec::new(),
+            namespace_members: HashMap::new(),
         }
     }
 
@@ -212,18 +318,8 @@ impl CodeGen {
         // Compute reachable declarations for dead code elimination
         let reachable = collect_reachable(decls);
 
-        // First pass: collect inductive type names and struct fields
-        for decl in decls {
-            match decl {
-                Decl::InductiveDef { name, .. } => {
-                    self.inductive_names.push(name.clone());
-                }
-                Decl::StructDef { name, fields } => {
-                    self.struct_fields.insert(name.clone(), fields.clone());
-                }
-                _ => {}
-            }
-        }
+        // First pass: collect inductive type names, struct fields, namespace names, and zero-arg fns
+        self.collect_all_info(decls, "");
 
         // Check if there are #eval declarations that need a main function
         let has_main_def = decls.iter().any(|d| matches!(d, Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } if name == "main"));
@@ -243,7 +339,8 @@ impl CodeGen {
                     let decl_name = match decl {
                         Decl::FunDef { name, .. } | Decl::FunDefMatch { name, .. } => Some(name.as_str()),
                         Decl::InductiveDef { name, .. } | Decl::StructDef { name, .. } => Some(name.as_str()),
-                        Decl::Eval(_) => None,
+                        Decl::Namespace { name, .. } => Some(name.as_str()),
+                        Decl::Eval(_) | Decl::Import { .. } | Decl::Open { .. } => None,
                     };
                     if let Some(name) = decl_name {
                         if !reachable.contains(name) {
@@ -290,6 +387,9 @@ impl CodeGen {
             Decl::InductiveDef { name, constructors } => self.gen_inductive(name, constructors),
             Decl::StructDef { name, fields } => self.gen_struct(name, fields),
             Decl::Eval(_) => Ok(()), // handled in generate()
+            Decl::Import { .. } => Ok(()),
+            Decl::Open { .. } => Ok(()),
+            Decl::Namespace { name, decls } => self.gen_namespace(name, decls),
         }
     }
 
@@ -537,6 +637,309 @@ impl CodeGen {
         self.indent -= 1;
         self.emit_line("}");
         Ok(())
+    }
+
+    fn collect_all_info(&mut self, decls: &[Decl], prefix: &str) {
+        for decl in decls {
+            match decl {
+                Decl::FunDef { name, params, .. } => {
+                    if params.is_empty() && name != "main" {
+                        self.zero_arg_fns.insert(name.clone());
+                        if !prefix.is_empty() {
+                            self.zero_arg_fns.insert(format!("{}.{}", prefix, name));
+                        }
+                    }
+                }
+                Decl::FunDefMatch { name, params, return_type, .. } => {
+                    // FunDefMatch with no explicit params but an Arrow return type
+                    // actually takes params from the arrow decomposition — not zero-arg
+                    if params.is_empty() && name != "main" {
+                        let has_arrow_params = matches!(return_type, Some(Type::Arrow(_, _)));
+                        if !has_arrow_params {
+                            self.zero_arg_fns.insert(name.clone());
+                            if !prefix.is_empty() {
+                                self.zero_arg_fns.insert(format!("{}.{}", prefix, name));
+                            }
+                        }
+                    }
+                }
+                Decl::InductiveDef { name, .. } => {
+                    self.inductive_names.push(name.clone());
+                }
+                Decl::StructDef { name, fields } => {
+                    self.struct_fields.insert(name.clone(), fields.clone());
+                }
+                Decl::Namespace { name, decls: inner } => {
+                    self.namespace_names.insert(name.clone());
+                    // Collect namespace members
+                    let mut members = HashSet::new();
+                    for d in inner {
+                        match d {
+                            Decl::FunDef { name: n, .. }
+                            | Decl::FunDefMatch { name: n, .. }
+                            | Decl::InductiveDef { name: n, .. }
+                            | Decl::StructDef { name: n, .. } => {
+                                members.insert(n.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                    self.namespace_members.insert(name.clone(), members);
+
+                    let new_prefix = if prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}.{}", prefix, name)
+                    };
+                    self.collect_all_info(inner, &new_prefix);
+                }
+                Decl::Import { .. } => {
+                    // Import implicitly opens the last segment
+                    // handled below when processing decls
+                }
+                Decl::Open { .. } | Decl::Eval(_) => {}
+            }
+        }
+
+        // Second pass: process import/open for opened namespaces
+        for decl in decls {
+            match decl {
+                Decl::Import { path } => {
+                    // Import opens the last segment namespace
+                    let last = path.segments.last().cloned().unwrap_or_default();
+                    if !last.is_empty() {
+                        self.opened_namespaces.push(last);
+                    }
+                }
+                Decl::Open { path } => {
+                    let name = path.segments.join(".");
+                    // For single-segment paths, use directly
+                    if path.segments.len() == 1 {
+                        self.opened_namespaces.push(path.segments[0].clone());
+                    } else {
+                        self.opened_namespaces.push(name);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn gen_namespace(&mut self, name: &str, decls: &[Decl]) -> LustcResult<()> {
+        let rust_name = to_snake_case(name);
+        self.emit_line(&format!("mod {} {{", rust_name));
+        self.indent += 1;
+        for decl in decls {
+            self.gen_decl_pub(decl)?;
+            self.output.push('\n');
+        }
+        self.indent -= 1;
+        self.emit_line("}");
+        Ok(())
+    }
+
+    fn gen_decl_pub(&mut self, decl: &Decl) -> LustcResult<()> {
+        match decl {
+            Decl::FunDef {
+                name,
+                params,
+                return_type,
+                body,
+            } => {
+                // Special case: main : IO Unit
+                if name == "main" && is_io_unit(return_type) {
+                    self.emit_str("pub fn main()");
+                    self.output.push_str(" {\n");
+                    self.indent += 1;
+                    self.gen_do_body(body)?;
+                    self.indent -= 1;
+                    self.emit_line("}");
+                    return Ok(());
+                }
+
+                self.emit_str(&format!("pub fn {}", to_snake_case(name)));
+                self.output.push('(');
+                for (i, (pname, ptype)) in params.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
+                    self.output
+                        .push_str(&format!("{}: {}", to_snake_case(pname), self.type_to_rust(ptype)));
+                }
+                self.output.push(')');
+
+                if let Some(ret) = return_type {
+                    if !matches!(ret, Type::Unit) {
+                        self.output
+                            .push_str(&format!(" -> {}", self.type_to_rust(ret)));
+                    }
+                }
+
+                self.output.push_str(" {\n");
+                self.indent += 1;
+                self.emit_indent();
+                self.gen_expr(body)?;
+                self.output.push('\n');
+                self.indent -= 1;
+                self.emit_line("}");
+                Ok(())
+            }
+            Decl::FunDefMatch {
+                name,
+                params,
+                return_type,
+                cases,
+            } => {
+                // Reuse the existing logic but prefix with pub
+                // For simplicity, generate as pub fn
+                let match_param_name = self.infer_match_param_name(cases);
+
+                let (all_params, actual_return_type) = if params.is_empty() {
+                    let mut arrow_parts = Vec::new();
+                    if let Some(ref ty) = return_type {
+                        Self::flatten_arrow(ty, &mut arrow_parts);
+                    }
+                    if arrow_parts.len() >= 2 {
+                        let ret = arrow_parts.pop().unwrap();
+                        let param_types: Vec<(String, String)> = arrow_parts
+                            .iter()
+                            .enumerate()
+                            .map(|(i, t)| {
+                                if i == arrow_parts.len() - 1 {
+                                    (match_param_name.clone(), self.type_to_rust(t))
+                                } else {
+                                    (format!("x{}", i), self.type_to_rust(t))
+                                }
+                            })
+                            .collect();
+                        (param_types, Some(self.type_to_rust(ret)))
+                    } else {
+                        let param_type = arrow_parts.first().map(|t| self.type_to_rust(t));
+                        let p = if let Some(ty) = param_type {
+                            vec![(match_param_name.clone(), ty)]
+                        } else {
+                            vec![]
+                        };
+                        (p, None)
+                    }
+                } else {
+                    let mut all: Vec<(String, String)> = params
+                        .iter()
+                        .map(|(n, t)| (n.clone(), self.type_to_rust(t)))
+                        .collect();
+                    if let Some(ref ty) = return_type {
+                        let mut arrow_parts = Vec::new();
+                        Self::flatten_arrow(ty, &mut arrow_parts);
+                        if arrow_parts.len() >= 2 {
+                            let ret = arrow_parts.pop().unwrap();
+                            for t in &arrow_parts {
+                                all.push((match_param_name.clone(), self.type_to_rust(t)));
+                            }
+                            (all, Some(self.type_to_rust(ret)))
+                        } else {
+                            let ret = return_type.as_ref().map(|t| self.type_to_rust(t));
+                            all.push((match_param_name.clone(), ret.clone().unwrap_or_default()));
+                            (all, ret)
+                        }
+                    } else {
+                        (all, None)
+                    }
+                };
+
+                let snake_match_param = to_snake_case(&match_param_name);
+                self.emit_str(&format!("pub fn {}", to_snake_case(name)));
+                self.output.push('(');
+                for (i, (pname, ptype)) in all_params.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
+                    self.output.push_str(&format!("{}: {}", to_snake_case(pname), ptype));
+                }
+                self.output.push(')');
+                if let Some(ref ret) = actual_return_type {
+                    if ret != "()" {
+                        self.output.push_str(&format!(" -> {}", ret));
+                    }
+                }
+                self.output.push_str(" {\n");
+                self.indent += 1;
+                self.emit_indent();
+                self.output
+                    .push_str(&format!("match {} {{\n", snake_match_param));
+                self.indent += 1;
+                for (patterns, body) in cases {
+                    self.emit_indent();
+                    if let Some(pat) = patterns.first() {
+                        if let Pattern::Successor(var, k) = pat {
+                            let snake_var = to_snake_case(var);
+                            self.output.push_str(&format!("{} => {{\n", snake_var));
+                            self.indent += 1;
+                            self.emit_indent();
+                            self.output
+                                .push_str(&format!("let {} = {}.saturating_sub({});\n", snake_var, snake_var, k));
+                            self.emit_indent();
+                            self.gen_expr(body)?;
+                            self.output.push('\n');
+                            self.indent -= 1;
+                            self.emit_indent();
+                            self.output.push_str("}\n");
+                            continue;
+                        }
+                        self.gen_pattern(pat)?;
+                    }
+                    self.output.push_str(" => ");
+                    self.gen_expr(body)?;
+                    self.output.push_str(",\n");
+                }
+                self.indent -= 1;
+                self.emit_indent();
+                self.output.push_str("}\n");
+                self.indent -= 1;
+                self.emit_line("}");
+                Ok(())
+            }
+            Decl::InductiveDef { name, constructors } => {
+                self.emit_line("#[derive(Debug, Clone, PartialEq)]");
+                self.emit_line(&format!("pub enum {} {{", name));
+                self.indent += 1;
+                for ctor in constructors {
+                    self.emit_indent();
+                    let pascal_name = to_pascal_case(&ctor.name);
+                    if ctor.fields.is_empty() {
+                        self.output.push_str(&format!("{},\n", pascal_name));
+                    } else {
+                        self.output.push_str(&format!("{}(", pascal_name));
+                        for (i, field) in ctor.fields.iter().enumerate() {
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
+                            self.output.push_str(&self.type_to_rust(field));
+                        }
+                        self.output.push_str("),\n");
+                    }
+                }
+                self.indent -= 1;
+                self.emit_line("}");
+                Ok(())
+            }
+            Decl::StructDef { name, fields } => {
+                self.emit_line("#[derive(Debug, Clone, PartialEq)]");
+                self.emit_line(&format!("pub struct {} {{", name));
+                self.indent += 1;
+                for (fname, ftype) in fields {
+                    self.emit_indent();
+                    self.output
+                        .push_str(&format!("pub {}: {},\n", fname, self.type_to_rust(ftype)));
+                }
+                self.indent -= 1;
+                self.emit_line("}");
+                Ok(())
+            }
+            Decl::Eval(_) => Ok(()),
+            Decl::Import { .. } => Ok(()),
+            Decl::Open { .. } => Ok(()),
+            Decl::Namespace { name, decls } => self.gen_namespace(name, decls),
+        }
     }
 
     fn gen_expr(&mut self, expr: &Expr) -> LustcResult<()> {
@@ -970,19 +1373,51 @@ impl CodeGen {
                 let rust_idx = idx.saturating_sub(1);
                 return format!("{}.{}", to_snake_case(obj), rust_idx);
             }
-            // Check for struct field access
+            // Check for inductive constructor
             let type_name = &name[..dot_pos];
             let ctor_name = &name[dot_pos + 1..];
             if self.inductive_names.contains(&type_name.to_string()) {
                 return format!("{}::{}", type_name, to_pascal_case(ctor_name));
             }
+            // Check for namespace-qualified name
+            if self.namespace_names.contains(type_name) {
+                let translated = format!("{}::{}", to_snake_case(type_name), to_snake_case(ctor_name));
+                if self.zero_arg_fns.contains(name) {
+                    return format!("{}()", translated);
+                }
+                return translated;
+            }
         }
+
         // List/Option builtins that appear as bare Var (no args)
         match name {
-            "List.nil" => "vec![]".to_string(),
-            "Option.none" => "None".to_string(),
-            _ => to_snake_case(name),
+            "List.nil" => return "vec![]".to_string(),
+            "Option.none" => return "None".to_string(),
+            _ => {}
         }
+
+        // Check if an unqualified name matches an opened namespace member
+        if !name.contains('.') {
+            for ns in &self.opened_namespaces {
+                if let Some(members) = self.namespace_members.get(ns) {
+                    if members.contains(name) {
+                        let translated = format!("{}::{}", to_snake_case(ns), to_snake_case(name));
+                        let qualified = format!("{}.{}", ns, name);
+                        if self.zero_arg_fns.contains(&qualified) || self.zero_arg_fns.contains(name) {
+                            return format!("{}()", translated);
+                        }
+                        return translated;
+                    }
+                }
+            }
+        }
+
+        let translated = to_snake_case(name);
+        // Handle zero-arg function calls for top-level defs
+        if self.zero_arg_fns.contains(name) {
+            return format!("{}()", translated);
+        }
+        translated
     }
 
     fn translate_constructor(&self, name: &str) -> String {
