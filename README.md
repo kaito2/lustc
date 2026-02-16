@@ -1,5 +1,9 @@
 # lustc
 
+[![CI](https://github.com/kaito2/lustc/actions/workflows/ci.yml/badge.svg)](https://github.com/kaito2/lustc/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/lustc.svg)](https://crates.io/crates/lustc)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 A Lean4 subset to Rust source-to-source compiler, written in Rust.
 
 ## Supported Lean4 Subset
